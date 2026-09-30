@@ -10,6 +10,10 @@ private final class FakeScreenReader: ScreenReader {
     var elementProvider: (() -> [AccessibilityElement])?
     var thrownError: Error?
     var delayNanoseconds: UInt64 = 0
+    /// When true, each read appends an element whose id changes, simulating observable progress.
+    /// Tests that expect a run to complete need this, because completion now requires evidence
+    /// that the screen actually changed.
+    var varyEachRead = false
     private(set) var readCount = 0
     private(set) var readTargets: [AppTarget] = []
 
@@ -25,7 +29,11 @@ private final class FakeScreenReader: ScreenReader {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
         if let thrownError { throw thrownError }
-        return elementProvider?() ?? elements
+        var result = elementProvider?() ?? elements
+        if varyEachRead {
+            result.append(AccessibilityElement(id: "read_\(readCount)", role: "Text", label: "tick"))
+        }
+        return result
     }
 }
 
@@ -217,9 +225,16 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: Done + verified => completed
 
-    func testDoneAndVerified_returnsCompleted() async {
+    func testDoneAndVerifiedAfterEvidence_returnsCompleted() async {
+        // Completion now requires evidence that the screen actually changed.
         let reader = FakeScreenReader(elements: [button("e1")])
-        let model = FakeDecisionModel(decisions: [AgentDecision(operation: .done)], verifyResult: true)
+        reader.varyEachRead = true
+        let model = FakeDecisionModel(
+            decisions: [
+                AgentDecision(operation: .click, targetId: "e1"),
+                AgentDecision(operation: .done),
+            ],
+            verifyResult: true)
         let executor = FakeActionExecutor()
 
         let loop = AgentLoop(
@@ -233,14 +248,45 @@ final class AgentLoopTests: XCTestCase {
         let result = await loop.run(goal: "search for Adele", target: testTarget())
 
         XCTAssertEqual(result.status, .completed)
-        XCTAssertEqual(result.stepsCompleted, 1)
+        XCTAssertEqual(result.stepsCompleted, 2)
         XCTAssertEqual(model.verifyCount, 1)
-        XCTAssertEqual(reader.readCount, 1)
+        XCTAssertEqual(executor.executed.count, 1)
+    }
+
+    /// A "done" on the very first step has nothing behind it — no action ran and the screen has
+    /// not changed — so it must not be reported as success. This is the run that claimed Completed
+    /// on a static Finder window with 318 elements and zero actions.
+    func testDoneOnFirstStepWithoutEvidence_isRejected() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(
+            decisions: [
+                AgentDecision(operation: .done),
+                AgentDecision(operation: .done),
+                AgentDecision(operation: .done),
+            ],
+            verifyResult: true)
+        let executor = FakeActionExecutor()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(maxSteps: 10),
+            riskPolicy: DefaultRiskPolicy()
+        )
+
+        let result = await loop.run(goal: "whereis Laya", target: testTarget())
+
+        XCTAssertNotEqual(result.status, .completed)
+        XCTAssertEqual(result.status, .needsHumanInput)
         XCTAssertEqual(executor.executed.count, 0)
     }
 
-    func testDoneButNotVerified_keepsLoopingUntilMaxSteps() async {
-        // A model that always reports Done but never verifies must not be trusted.
+    func testDoneButNotVerified_stopsAtMaxSteps_whenCapIsLowerThanTheDoneLimit() async {
+        // A model that always reports Done but never verifies must not be trusted. When the step
+        // cap is reached before the inconclusive-done limit, the run ends as maxStepsReached;
+        // the circuit-breaker case is covered by
+        // `testDoneWithoutEvidence_isNotExecuted_andAsksTheUserAfterThreeTries`.
         let reader = FakeScreenReader(elements: [button("e1")])
         let model = FakeDecisionModel(decisions: [], verifyResult: false)
         model.decisionProvider = { AgentDecision(operation: .done) }
@@ -250,15 +296,15 @@ final class AgentLoopTests: XCTestCase {
             screenReader: reader,
             decisionModel: model,
             actionExecutor: executor,
-            options: options(maxSteps: 3),
+            options: options(maxSteps: 2),
             riskPolicy: DefaultRiskPolicy()
         )
 
         let result = await loop.run(goal: "never finishes", target: testTarget())
 
         XCTAssertEqual(result.status, .maxStepsReached)
-        XCTAssertEqual(result.stepsCompleted, 3)
-        XCTAssertEqual(model.verifyCount, 3)
+        XCTAssertEqual(result.stepsCompleted, 2)
+        XCTAssertEqual(model.verifyCount, 2)
     }
 
     // MARK: askUser => needsHumanInput
@@ -413,6 +459,8 @@ final class AgentLoopTests: XCTestCase {
         let safeDecision = AgentDecision(operation: .click, targetId: "e1", targetLabel: "Submit Application")
 
         let reader = FakeScreenReader(elements: [safeElement])
+        // A real click changes the screen; completion requires evidence, so simulate that.
+        reader.varyEachRead = true
         let model = FakeDecisionModel(decisions: [safeDecision, AgentDecision(operation: .done)])
         let executor = FakeActionExecutor(result: .successResult("Executed"))
         let prompt = FakeConfirmationPrompt()
@@ -536,5 +584,76 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertTrue(defaults.dryRun)
         XCTAssertEqual(defaults.maxConsecutiveStalls, 15)
         XCTAssertEqual(defaults.actionTimeoutSeconds, 10)
+    }
+
+    // MARK: A "done" without evidence is not an action
+
+    /// Regression for the `whereis Laya` run: the model kept answering "done", verification kept
+    /// finding no evidence, and the loop executed each one as a no-op until the stall guard fired
+    /// 15 steps later. It must hand back to the user instead.
+    func testDoneWithoutEvidence_isNotExecuted_andAsksTheUserAfterThreeTries() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(
+            decisions: [
+                AgentDecision(operation: .done),
+                AgentDecision(operation: .done),
+                AgentDecision(operation: .done),
+                AgentDecision(operation: .done),
+            ],
+            verifyResult: false)
+        let executor = FakeActionExecutor()
+        let audit = FakeAuditLog()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(maxSteps: 10),
+            riskPolicy: DefaultRiskPolicy(),
+            auditLog: audit
+        )
+
+        let result = await loop.run(goal: "whereis Laya", target: testTarget())
+
+        XCTAssertEqual(result.status, .needsHumanInput)
+        XCTAssertTrue(result.message?.contains("confirm the task") ?? false,
+                      "Message was: \(result.message ?? "")")
+        // A done decision must never reach the executor.
+        XCTAssertEqual(executor.executed.count, 0)
+        XCTAssertEqual(model.verifyCount, 3)
+        XCTAssertTrue(audit.entries.contains { $0.decisionType == "inconclusive" })
+    }
+
+    /// Regression for the `whereis Laya` false success: actions were executed, the screen never
+    /// changed once, verification still "agreed", and the run reported Completed — which the
+    /// overlay then auto-dismissed. Completion must require evidence.
+    func testCompletionWithoutAnyScreenChange_isRejected() async {
+        let reader = FakeScreenReader(elements: [button("e1")]) // identical on every read
+        let model = FakeDecisionModel(
+            decisions: [
+                AgentDecision(operation: .pressEscape),
+                AgentDecision(operation: .pressEscape),
+                AgentDecision(operation: .done),
+                AgentDecision(operation: .done),
+                AgentDecision(operation: .done),
+            ],
+            verifyResult: true) // the verifier wrongly agrees
+        let executor = FakeActionExecutor()
+        let audit = FakeAuditLog()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(maxSteps: 10),
+            riskPolicy: DefaultRiskPolicy(),
+            auditLog: audit
+        )
+
+        let result = await loop.run(goal: "whereis Laya", target: testTarget())
+
+        XCTAssertNotEqual(result.status, .completed, "Must not claim success without evidence")
+        XCTAssertEqual(result.status, .needsHumanInput)
+        XCTAssertTrue(audit.entries.contains { $0.decisionType == "inconclusive" })
     }
 }
