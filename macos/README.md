@@ -88,12 +88,37 @@ Accessibility Permission…**. It shows the macOS consent dialog (which register
 *current* code identity) and opens the settings pane. GhostHand re-checks the permission every few
 seconds and installs the hotkey as soon as it is granted, so no restart is needed.
 
-> Toggling a **stale** Accessibility entry left over from an earlier ad-hoc build has no effect.
-> Clear it and grant again:
+> Toggling a **stale** Accessibility entry left over from an earlier ad-hoc build has no effect:
+> the switch looks enabled, but it belongs to the previous code signature, so the running app is
+> a different identity. Clear it and grant again:
 >
 > ```bash
-> tccutil reset Accessibility com.ghosthand.macos
+> Scripts/reset-permissions.sh                # Accessibility + Screen Recording
+> Scripts/reset-permissions.sh ListenEvent    # also clear the hotkey/Input Monitoring grant
 > ```
+>
+> The script clears the stale decisions and opens the settings pane. If GhostHand is not in the
+> list afterwards, add it with **+** using `dist/GhostHand.app`. No restart is needed — the app
+> re-checks every 3 seconds and installs the hotkey as soon as the grant lands.
+>
+> **Fix the root cause instead of re-granting.** Run this once:
+>
+> ```bash
+> Scripts/create-signing-identity.sh      # self-signed cert in your login keychain
+> Scripts/make-app-bundle.sh -c release   # now signed with a stable identity
+> ```
+>
+> macOS keys the grants to the code signature. An ad-hoc signature changes on every rebuild, so
+> the grants keep dying; a self-signed certificate gives a **constant** identity, so they survive.
+> You can confirm it with `codesign -d -r- dist/GhostHand.app`, which prints a designated
+> requirement pinned to the certificate — identical across rebuilds.
+>
+> `Scripts/make-app-bundle.sh` uses the identity automatically when present and falls back to
+> ad-hoc (with a warning) if it is missing or signing fails, so a build never leaves the bundle
+> unsigned. `GHOSTHAND_SIGNING_IDENTITY` overrides the name.
+>
+> The certificate is self-signed and local-only; it is not a substitute for the Developer ID used
+> for distribution — see `../RELEASING.md`.
 
 ---
 
@@ -232,6 +257,12 @@ the agent would otherwise act blind — set `GHOSTHAND_ALLOW_NO_AX=1` to overrid
 - **Every decision is audited** locally as JSONL.
 - Jarvis mode executes all *non-deletion* actions automatically, exactly like the Windows
   build's current policy.
+- **Low-confidence guesses can be refused.** With `LAYA_MIN_CONFIDENCE` above `0.0` the agent
+  hands back to you (`ask_user`) instead of executing an action the model is unsure about. At the
+  default `0.0` the model's choice is always executed — which is how a 1%-confidence guess runs.
+- **A "done" without evidence is never treated as an action.** If the model keeps reporting
+  completion that verification cannot confirm, GhostHand stops after three attempts and asks you,
+  instead of burning its stall budget and reporting a loop-guard trip.
 
 Because Laya is local, the state GhostHand sends never leaves the machine at all.
 

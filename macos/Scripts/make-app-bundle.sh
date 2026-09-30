@@ -40,11 +40,37 @@ chmod 644 "$APP/Contents/Resources/laya_serve.py" "$APP/Contents/MacOS/laya_serv
 chmod 755 "$APP/Contents/MacOS/GhostHandApp"
 [ -f "$APP/Contents/MacOS/ghosthand" ] && chmod 755 "$APP/Contents/MacOS/ghosthand"
 
-# Ad-hoc signature.
-# Re-sign with a Developer ID for distribution.
-if ! codesign --force --deep --sign - "$APP" 2>/tmp/ghosthand-codesign.log; then
-  echo "warning: ad-hoc codesign failed; the app still runs but permissions may need re-granting"
+# Signing.
+#
+# Prefer a stable local identity. macOS keys Accessibility / Screen Recording / Input Monitoring
+# grants to the code signature, and an ad-hoc signature changes on every rebuild — which silently
+# invalidates those grants. A self-signed certificate gives a constant identity, so grants survive
+# rebuilds. Create one with: Scripts/create-signing-identity.sh
+LOCAL_IDENTITY="${GHOSTHAND_SIGNING_IDENTITY:-GhostHand Local Signing}"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$LOCAL_IDENTITY"; then
+  SIGN_ID="$LOCAL_IDENTITY"
+  echo "==> Signing with '$LOCAL_IDENTITY' (stable identity — permissions survive rebuilds)"
+else
+  SIGN_ID="-"
+  echo "==> Signing ad-hoc (permissions must be re-granted after every rebuild)"
+  echo "    Run Scripts/create-signing-identity.sh once to stop that."
+fi
+
+# --deep also signs the nested CLI binary and the bundled launcher script, which codesign treats
+# as nested code. (For distribution, sign nested code explicitly instead — see RELEASING.md.)
+sign_bundle() {
+  codesign --force --deep --sign "$SIGN_ID" "$APP"
+}
+
+if ! sign_bundle 2>/tmp/ghosthand-codesign.log; then
+  echo "warning: signing with '$SIGN_ID' failed"
   sed 's/^/    /' /tmp/ghosthand-codesign.log | head -5
+  if [ "$SIGN_ID" != "-" ]; then
+    echo "==> Falling back to an ad-hoc signature so the bundle is never left unsigned"
+    if ! codesign --force --deep --sign - "$APP" 2>>/tmp/ghosthand-codesign.log; then
+      echo "warning: ad-hoc codesign also failed; the app may not launch"
+    fi
+  fi
 fi
 
 echo "==> Built $APP"
@@ -53,3 +79,7 @@ echo "    CLI:      \"$APP/Contents/MacOS/ghosthand\" check"
 echo ""
 echo "Grant Accessibility permission on first use:"
 echo "  System Settings > Privacy & Security > Accessibility > GhostHand"
+echo ""
+echo "Note: this rebuild changed the code signature, so any previous Accessibility /"
+echo "      Screen Recording grant no longer applies to this binary. Re-grant it, or run"
+echo "      Scripts/reset-permissions.sh first to clear the stale entry."
