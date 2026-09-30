@@ -51,7 +51,10 @@ final class ApiKeySetupWindow: NSObject, NSWindowDelegate {
         title.frame = NSRect(x: 20, y: 158, width: 420, height: 20)
         content.addSubview(title)
 
-        let hint = NSTextField(labelWithString: "Laya runs locally and normally needs no key. If you set LAYA_API_KEY on the server, paste it here — it is stored in the macOS Keychain.")
+        let hint = NSTextField(
+            labelWithString: "Laya runs locally and normally needs no key. If you set LAYA_API_KEY "
+                + "on the server, paste it here — it is stored in the macOS Keychain."
+        )
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         hint.lineBreakMode = .byWordWrapping

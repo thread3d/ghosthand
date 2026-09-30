@@ -110,6 +110,9 @@ public final class AXScreenReader: ScreenReader {
         return elements
     }
 
+    // The recursion context is threaded through the walk; collapsing these into a struct would
+    // only move the same state around, so the wide signature is the honest one.
+    // swiftlint:disable:next function_parameter_count
     private static func enumerate(
         _ element: AXUIElement,
         depth: Int,
@@ -275,8 +278,15 @@ public final class AXScreenReader: ScreenReader {
               CFGetTypeID(size) == AXValueGetTypeID() else { return .zero }
         var point = CGPoint.zero
         var dimensions = CGSize.zero
-        guard AXValueGetValue(position as! AXValue, .cgPoint, &point),
-              AXValueGetValue(size as! AXValue, .cgSize, &dimensions) else { return .zero }
+        // The CFTypeID checks above already validated the dynamic types. Swift has no checked
+        // downcast to a CoreFoundation type — `as?` is rejected as "always succeeds" — so `as!`
+        // after an explicit type-ID check is the correct idiom here.
+        // swiftlint:disable:next force_cast
+        let positionValue = position as! AXValue
+        // swiftlint:disable:next force_cast
+        let sizeValue = size as! AXValue
+        guard AXValueGetValue(positionValue, .cgPoint, &point),
+              AXValueGetValue(sizeValue, .cgSize, &dimensions) else { return .zero }
         return CGRect(origin: point, size: dimensions)
     }
 
@@ -284,7 +294,9 @@ public final class AXScreenReader: ScreenReader {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
+        // swiftlint:disable:next force_cast
+        let window = value as! AXUIElement
+        return window
     }
 
     private static func windows(of appElement: AXUIElement) -> [AXUIElement] {

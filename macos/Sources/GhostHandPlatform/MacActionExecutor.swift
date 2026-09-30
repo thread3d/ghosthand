@@ -326,6 +326,8 @@ public final class MacActionExecutor: ActionExecutorProtocol {
         if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &windowValue) == .success,
            let windowValue,
            CFGetTypeID(windowValue) == AXUIElementGetTypeID() {
+            // The CFTypeID check above already validated the dynamic type.
+            // swiftlint:disable:next force_cast
             AXUIElementPerformAction(windowValue as! AXUIElement, kAXRaiseAction as CFString)
         }
     }
@@ -374,6 +376,8 @@ public final class MacActionExecutor: ActionExecutorProtocol {
         guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &value) == .success,
               let value,
               CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
+        // swiftlint:disable:next force_cast
+        let parent = value as! AXUIElement
+        return parent
     }
 }

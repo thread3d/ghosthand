@@ -23,7 +23,8 @@ final class LayaDTOTests: XCTestCase {
         )
 
         let data = try JSONEncoder().encode(request)
-        let json = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\\/", with: "/")
+        let json = (String(bytes: data, encoding: .utf8) ?? "")
+            .replacingOccurrences(of: "\\/", with: "/")
 
         XCTAssertTrue(json.contains("\"state\":{"), json)
         XCTAssertTrue(json.contains("\"questions\":{"), json)

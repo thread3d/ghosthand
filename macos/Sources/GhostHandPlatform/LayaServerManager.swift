@@ -81,7 +81,9 @@ public final class LayaServerManager: @unchecked Sendable {
 
         guard FileManager.default.fileExists(atPath: modelsRoot) else {
             throw LayaError.serverUnavailable(
-                "no Laya checkpoints at '\(modelsRoot)'; set LAYA_MODELS_ROOT to the directory holding laya, laya-multilingual and laya-typed-decisions")
+                "no Laya checkpoints at '\(modelsRoot)'; set LAYA_MODELS_ROOT to the directory "
+                    + "holding laya, laya-multilingual and laya-typed-decisions"
+            )
         }
 
         let cacheRoot = Self.cacheRoot()

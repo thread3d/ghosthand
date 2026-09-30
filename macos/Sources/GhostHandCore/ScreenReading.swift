@@ -21,15 +21,30 @@ public struct ScreenReaderOptions: Sendable {
 // card/key/bearer patterns never escape toward the model or the audit log.
 
 public enum SecretSanitizer {
-    private static let cardRegex = try! NSRegularExpression(
-        pattern: #"\b(?:\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{1,4}|\d{13,16})\b"#
+    private static let cardRegex = makeRegex(
+        #"\b(?:\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{1,4}|\d{13,16})\b"#
     )
-    private static let apiKeyRegex = try! NSRegularExpression(
-        pattern: #"\b(?:vck_[a-zA-Z0-9_-]{10,}|sk-[a-zA-Z0-9_-]{20,}|ghp_[a-zA-Z0-9]{25,}|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{10,})\b"#
+    private static let apiKeyRegex = makeRegex(
+        #"\b(?:vck_[a-zA-Z0-9_-]{10,}|sk-[a-zA-Z0-9_-]{20,}|ghp_[a-zA-Z0-9]{25,}"# +
+        #"|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{10,})\b"#
     )
-    private static let bearerRegex = try! NSRegularExpression(
-        pattern: #"(Bearer\s+)[a-zA-Z0-9_\-\.]{15,}"#,
+    private static let bearerRegex = makeRegex(
+        #"(Bearer\s+)[a-zA-Z0-9_\-\.]{15,}"#,
         options: [.caseInsensitive]
+    )
+    // Cloud/provider credentials not covered by apiKeyRegex: AWS access keys, GitHub
+    // tokens, Slack tokens, Google API keys, Stripe secret keys.
+    private static let providerKeyRegex = makeRegex(
+        #"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"# +
+        #"|\bgh[opsur]_[A-Za-z0-9]{36,}\b"# +
+        #"|\bxox[baprs]-[A-Za-z0-9-]{10,}\b"# +
+        #"|\bxapp-[A-Za-z0-9-]{10,}\b"# +
+        #"|\bAIza[0-9A-Za-z_\-]{35}\b"# +
+        #"|\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b"#
+    )
+    // PEM private-key headers; the body carries the secret, so the marker is redacted too.
+    private static let privateKeyRegex = makeRegex(
+        #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#
     )
 
     public static func sanitize(_ text: String?, isPassword: Bool = false) -> String {
@@ -39,6 +54,8 @@ public enum SecretSanitizer {
         var result = text
         result = replace(cardRegex, in: result, with: "[REDACTED_CARD]")
         result = replace(apiKeyRegex, in: result, with: "[REDACTED_KEY]")
+        result = replace(providerKeyRegex, in: result, with: "[REDACTED_KEY]")
+        result = replace(privateKeyRegex, in: result, with: "[REDACTED_PRIVATE_KEY]")
         result = replace(bearerRegex, in: result, with: "$1[REDACTED]")
         return result
     }

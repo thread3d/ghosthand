@@ -190,7 +190,7 @@ public enum UrlLauncherValidator {
     // MARK: Regex plumbing
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
-        try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        makeRegex(pattern, options: [.caseInsensitive])
     }
 
     private static let urlRegex = regex(#"https?://[^\s"'<>]+"#)
@@ -212,11 +212,16 @@ public enum UrlLauncherValidator {
     )
 
     private static let chainedSearchRegex = regex(
-        #"(?:(?:open|launch|start)\s+[a-zA-Z0-9_\- ]+?\s+(?:and|then)\s+)?(?:search|go\s+to|open)\s+(?:for\s+)?([a-zA-Z0-9_\-]+)\s+(?:and|then)\s+(?:search|play|find|look\s+up)\s+(?:for\s+)?(.+?)(?:\.|$)"#
+        #"(?:(?:open|launch|start)\s+[a-zA-Z0-9_\- ]+?\s+(?:and|then)\s+)?"# +
+        #"(?:search|go\s+to|open)\s+(?:for\s+)?([a-zA-Z0-9_\-]+)\s+(?:and|then)\s+"# +
+        #"(?:search|play|find|look\s+up)\s+(?:for\s+)?(.+?)(?:\.|$)"#
     )
 
     private static let musicStreamRegex = regex(
-        #"(?:(?:open|launch|start)\s+([a-zA-Z0-9_\- ]+?)\s+(?:and|then)\s+)?(?:play|listen\s+to|stream)(?:\s+(?:any\s+song\s+(?:of|by)|songs?\s+(?:of|by)|music\s+(?:of|by)|tracks?\s+(?:of|by)))?\s+(.+?)(?:\s+(?:on|in|using|with)\s+([a-zA-Z0-9_\-]+)|\.|$)"#
+        #"(?:(?:open|launch|start)\s+([a-zA-Z0-9_\- ]+?)\s+(?:and|then)\s+)?"# +
+        #"(?:play|listen\s+to|stream)"# +
+        #"(?:\s+(?:any\s+song\s+(?:of|by)|songs?\s+(?:of|by)|music\s+(?:of|by)|tracks?\s+(?:of|by)))?"# +
+        #"\s+(.+?)(?:\s+(?:on|in|using|with)\s+([a-zA-Z0-9_\-]+)|\.|$)"#
     )
 
     private static let musicPrefixRegex = regex(
@@ -224,7 +229,10 @@ public enum UrlLauncherValidator {
     )
 
     private static let generalSearchRegex = regex(
-        #"(?:(?:open|launch|start)\s+[a-zA-Z0-9_\- ]+?\s+(?:and|then)\s+)?(?:search|look\s+up|find|query)(?:\s+(?:for|about|on|regarding|the\s+web\s+for))?\s+(.+?)(?:\s+(?:on|in|using|with)\s+([a-zA-Z0-9\-_]+)|\.|$)"#
+        #"(?:(?:open|launch|start)\s+[a-zA-Z0-9_\- ]+?\s+(?:and|then)\s+)?"# +
+        #"(?:search|look\s+up|find|query)"# +
+        #"(?:\s+(?:for|about|on|regarding|the\s+web\s+for))?"# +
+        #"\s+(.+?)(?:\s+(?:on|in|using|with)\s+([a-zA-Z0-9\-_]+)|\.|$)"#
     )
 
     private static func firstMatch(

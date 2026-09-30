@@ -90,6 +90,7 @@ public final class AgentLoop {
         var history: [String] = []
         let loopGuard = LoopGuard(maxConsecutiveStalls: options.maxConsecutiveStalls)
         var step = 0
+        let runId = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12))
 
         GhostLog.shared.info("Starting AgentLoop for goal '\(goal)' on target '\(currentTarget.processName)' (DryRun: \(options.dryRun))")
 
@@ -99,7 +100,7 @@ public final class AgentLoop {
             notifyStatus(goalProhibitedReason)
             if let auditLog {
                 await auditLog.log(AuditLogEntry(
-                    goal: goal, operation: .askUser,
+                    runId: runId, step: 0, goal: goal, operation: .askUser,
                     appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
                     decisionType: "prohibited", reason: goalProhibitedReason))
             }
@@ -112,7 +113,7 @@ public final class AgentLoop {
             notifyStatus("Security policy refusal: \(denyReason)")
             if let auditLog {
                 await auditLog.log(AuditLogEntry(
-                    goal: goal, operation: .askUser,
+                    runId: runId, step: 0, goal: goal, operation: .askUser,
                     appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
                     decisionType: "denied", reason: denyReason))
             }
@@ -188,7 +189,7 @@ public final class AgentLoop {
                     notifyStatus(actionProhibitedReason)
                     if let auditLog {
                         await auditLog.log(AuditLogEntry(
-                            goal: goal, operation: decision.operation,
+                            runId: runId, step: step, goal: goal, operation: decision.operation,
                             targetId: decision.targetId,
                             targetLabel: targetElement?.displayLabel ?? decision.targetLabel,
                             targetRole: targetElement?.displayRole,
@@ -198,37 +199,45 @@ public final class AgentLoop {
                     return .failed(steps: step, history: history, error: actionProhibitedReason)
                 }
 
-                // 8. Safety invariants: Jarvis mode — no confirmation dialogs except for deletion
-                // (already blocked above). Kept as a safety net for future policy changes.
+                // 8. Safety invariants: honour the risk policy's confirmation requirement.
+                // Jarvis mode's default policy never requires confirmation (deletion is blocked
+                // outright above), but a policy that does require it must actually ask a human
+                // and fail closed when no prompt is available.
                 if let riskReason = riskPolicy.requiresConfirmation(
                     decision: decision, target: targetElement, appTarget: currentTarget) {
-                    let approved = await confirmationPrompt?.requestConfirmation(
-                        decision: decision, target: targetElement, appTarget: currentTarget, reason: riskReason) ?? false
-                    if !approved {
+                    guard let confirmationPrompt else {
+                        GhostLog.shared.error("Policy requires confirmation but no confirmation prompt is configured. Refusing action.")
+                        notifyStatus("Confirmation required but unavailable: \(riskReason)")
                         if let auditLog {
                             await auditLog.log(AuditLogEntry(
-                                goal: goal, operation: decision.operation,
+                                runId: runId, step: step, goal: goal, operation: decision.operation,
                                 targetId: decision.targetId,
                                 targetLabel: targetElement?.displayLabel ?? decision.targetLabel,
                                 targetRole: targetElement?.displayRole,
                                 appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
-                                decisionType: "rejected", reason: riskReason))
+                                decisionType: "denied", reason: riskReason))
                         }
-                        notifyStatus("Action rejected by human.")
-                        return .cancelled(steps: step, history: history)
+                        return .needsHumanInput(steps: step, history: history, reason: riskReason)
                     }
+
+                    let approved = await confirmationPrompt.requestConfirmation(
+                        decision: decision, target: targetElement, appTarget: currentTarget, reason: riskReason)
                     if let auditLog {
                         await auditLog.log(AuditLogEntry(
-                            goal: goal, operation: decision.operation,
+                            runId: runId, step: step, goal: goal, operation: decision.operation,
                             targetId: decision.targetId,
                             targetLabel: targetElement?.displayLabel ?? decision.targetLabel,
                             targetRole: targetElement?.displayRole,
                             appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
-                            decisionType: "confirmed", reason: riskReason))
+                            decisionType: approved ? "confirmed" : "rejected", reason: riskReason))
+                    }
+                    if !approved {
+                        notifyStatus("Action rejected by human.")
+                        return .cancelled(steps: step, history: history)
                     }
                 } else if let auditLog {
                     await auditLog.log(AuditLogEntry(
-                        goal: goal, operation: decision.operation,
+                        runId: runId, step: step, goal: goal, operation: decision.operation,
                         targetId: decision.targetId,
                         targetLabel: targetElement?.displayLabel ?? decision.targetLabel,
                         targetRole: targetElement?.displayRole,
@@ -241,7 +250,11 @@ public final class AgentLoop {
                 notifyStatus("\(stepPrefix): \(decision.operation.rawValue) on \(actionLabel)")
 
                 let result = try await actionExecutor.execute(decision: decision, targetElement: targetElement)
-                history.append("\(decision.operation.rawValue):\(decision.targetId ?? "") (\(decision.targetLabel ?? "")) -> \(result.success ? "ok" : (result.error ?? ""))")
+                let outcome = result.success ? "ok" : (result.error ?? "")
+                history.append(
+                    "\(decision.operation.rawValue):\(decision.targetId ?? "") "
+                        + "(\(decision.targetLabel ?? "")) -> \(outcome)"
+                )
                 onStepCompleted?(step, decision, result)
 
                 if !result.success {

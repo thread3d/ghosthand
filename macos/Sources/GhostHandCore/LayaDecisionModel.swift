@@ -61,7 +61,8 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
                 instructions: "Select the single best next action to advance toward: \"\(goal)\""
             ),
             "goalAchieved": .noul(
-                "Has the user's task \"\(goal)\" already been completely fulfilled by the current screen state? Answer yes only when every requirement is visibly satisfied."
+                "Has the user's task \"\(goal)\" already been completely fulfilled by the current " +
+                "screen state? Answer yes only when every requirement is visibly satisfied."
             ),
         ]
 
@@ -113,7 +114,8 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
             state: state,
             questions: [
                 "done": .noul(
-                    "Are ALL requirements of the task \"\(goal)\" completely satisfied based on the visible controls and the recorded actions? Answer yes only when every requirement is met."
+                    "Are ALL requirements of the task \"\(goal)\" completely satisfied based on the " +
+                    "visible controls and the recorded actions? Answer yes only when every requirement is met."
                 ),
             ]
         ))
@@ -165,7 +167,9 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
                 questions: [
                     "actionRisk": .score(
                         ["harmless", "reversible edit", "irreversible or external effect"],
-                        instructions: "Rate the risk of this proposed user-interface action from lowest (harmless UI navigation) to highest (irreversible external effect, submission, payment, deletion, or external data transmission)."
+                        instructions: "Rate the risk of this proposed user-interface action from lowest " +
+                            "(harmless UI navigation) to highest (irreversible external effect, " +
+                            "submission, payment, deletion, or external data transmission)."
                     ),
                 ]
             ))
@@ -276,7 +280,8 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
                     }
 
                     let keyEnter = "type_and_enter:\(element.id):\(textCandidate)"
-                    let descriptionEnter = "Type \"\(textCandidate)\" into \(element.displayRole) \"\(element.displayLabel)\" and press Enter"
+                    let descriptionEnter = "Type \"\(textCandidate)\" into \(element.displayRole) "
+                        + "\"\(element.displayLabel)\" and press Enter"
                     choices[keyEnter] = descriptionEnter
 
                     let key = "type:\(element.id):\(textCandidate)"
@@ -534,10 +539,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
 
     private static func regex(_ pattern: String, caseInsensitive: Bool = false) -> NSRegularExpression {
         // Patterns are compile-time constants; a failure here is a programmer error.
-        try! NSRegularExpression(
-            pattern: pattern,
-            options: caseInsensitive ? [.caseInsensitive] : []
-        )
+        makeRegex(pattern, options: caseInsensitive ? [.caseInsensitive] : [])
     }
 
     private static let quotedRegex = regex(#"["']([^"']+)["']"#)
@@ -552,13 +554,18 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
     )
 
     private static let searchPhraseRegex = regex(
-        #"(?:search|look\s+up|find|google|query)(?:\s+(?:for|about|on|regarding|the\s+web\s+for))?\s+(?:["']?)(.+?)(?:["']?)(?:\s+(?:on|in|using|with)\s+[a-zA-Z0-9_\-]+|\.|$|\band\b)"#,
+        #"(?:search|look\s+up|find|google|query)"# +
+        #"(?:\s+(?:for|about|on|regarding|the\s+web\s+for))?\s+(?:["']?)(.+?)(?:["']?)"# +
+        #"(?:\s+(?:on|in|using|with)\s+[a-zA-Z0-9_\-]+|\.|$|\band\b)"#,
         caseInsensitive: true
     )
     private static let searchPrefixRegex = regex(#"^(?:for|about|on)\s+"#, caseInsensitive: true)
 
     private static let playPhraseRegex = regex(
-        #"(?:play|listen\s+to|stream)(?:\s+(?:any\s+song\s+(?:of|by)|songs?\s+(?:of|by)|music\s+(?:of|by)|tracks?\s+(?:of|by)))?\s+(?:["']?)(.+?)(?:["']?)(?:\s+(?:on|in|using|with)\s+[a-zA-Z0-9_\-]+|\.|$|\band\b)"#,
+        #"(?:play|listen\s+to|stream)"# +
+        #"(?:\s+(?:any\s+song\s+(?:of|by)|songs?\s+(?:of|by)|music\s+(?:of|by)|tracks?\s+(?:of|by)))?"# +
+        #"\s+(?:["']?)(.+?)(?:["']?)"# +
+        #"(?:\s+(?:on|in|using|with)\s+[a-zA-Z0-9_\-]+|\.|$|\band\b)"#,
         caseInsensitive: true
     )
     private static let playPrefixRegex = regex(

@@ -128,6 +128,15 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertNotNil(policy.isAppDenied(app))
     }
 
+    /// Renamed or suffixed binaries (e.g. "1password-beta", "keepassxc-cli") must still be
+    /// caught: matching is substring-based, mirroring the Windows port.
+    func testRS09_RenamedOrSuffixedManagerBinaries_AreStillDenied() {
+        for processName in ["1password-beta", "keepassxc-cli", "bitwarden_helper", "LastPass-mac"] {
+            let app = AppTarget(processId: 7, processName: processName, windowTitle: "Vault")
+            XCTAssertNotNil(policy.isAppDenied(app), "Expected '\(processName)' to be denied")
+        }
+    }
+
     // MARK: - RS10: deletion goals are strictly prohibited
 
     func testRS10_DeletionGoals_AreStrictlyProhibited() {
@@ -229,6 +238,22 @@ final class RiskPolicyTests: XCTestCase {
         let element = AccessibilityElement(id: "e1", role: "Button", label: "Submit Application")
 
         XCTAssertNil(policy.isActionProhibited(decision: decision, target: element, goal: "apply"))
+    }
+
+    /// Zero-width / bidirectional control characters must not smuggle a deletion word past
+    /// the policy: the matcher normalises text before applying the regex.
+    func testRS11_ZeroWidthObfuscatedDeletion_IsProhibited() {
+        let obfuscatedGoal = "de\u{200B}le\u{200C}te the temp files"
+        XCTAssertNotNil(policy.isGoalProhibited(obfuscatedGoal))
+        XCTAssertNotEqual(obfuscatedGoal, "delete the temp files") // the obfuscation is real
+
+        let label = "De\u{200D}lete"
+        let decision = AgentDecision(operation: .click, targetId: "e_del", targetLabel: label)
+        let element = AccessibilityElement(id: "e_del", role: "Button", label: label, enabled: true)
+        XCTAssertNotNil(policy.isActionProhibited(decision: decision, target: element, goal: "clean up"))
+
+        // Bidi override variant: "de\u{202E}lete" renders as "delete".
+        XCTAssertNotNil(policy.isGoalProhibited("de\u{202E}lete"))
     }
 
     // MARK: - RS08 (MockJobPage): prompt injection through screen text
