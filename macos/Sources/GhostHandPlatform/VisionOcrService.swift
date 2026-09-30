@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import GhostHandCore
+import ScreenCaptureKit
 import Vision
 
 // MARK: - VisionOcrService
@@ -37,7 +38,7 @@ public final class VisionOcrService: OcrService, @unchecked Sendable {
         let rect = bounds.standardized
         guard rect.width >= 1, rect.height >= 1 else { return [] }
 
-        guard let image = Self.captureScreenArea(rect) else {
+        guard let image = await Self.captureScreenArea(rect) else {
             GhostLog.shared.warning(
                 "VisionOcrService: screen capture unavailable for \(Int(rect.width))x\(Int(rect.height)) "
                     + "at (\(Int(rect.minX)), \(Int(rect.minY))). Grant Screen Recording permission to enable OCR."
@@ -55,23 +56,65 @@ public final class VisionOcrService: OcrService, @unchecked Sendable {
 
     // MARK: - Capture
 
-    /// Captures the on-screen content of `rect` via CGWindowList, falling back to a
+    /// Captures the on-screen content of `rect` via ScreenCaptureKit, falling back to a
     /// main-display capture. Returns nil when no image can be obtained.
-    private static func captureScreenArea(_ rect: CGRect) -> CGImage? {
-        if let image = CGWindowListCreateImage(
-            rect,
-            .optionOnScreenOnly,
-            kCGNullWindowID,
-            [.bestResolution]
-        ) {
+    private static func captureScreenArea(_ rect: CGRect) async -> CGImage? {
+        if let image = await captureWithScreenCaptureKit(rect) {
+            GhostLog.shared.debug(
+                "VisionOcrService: captured \(Int(rect.width))x\(Int(rect.height)) via ScreenCaptureKit"
+            )
             return image
         }
 
+        GhostLog.shared.debug("VisionOcrService: ScreenCaptureKit unavailable; trying CGDisplayCreateImage.")
         if let image = CGDisplayCreateImage(CGMainDisplayID(), rect: rect) {
             return image
         }
 
         return nil
+    }
+
+    /// `SCScreenshotManager` is macOS 14's replacement for the deprecated
+    /// `CGWindowListCreateImage`. It needs Screen Recording permission; a failure here is
+    /// expected (and handled by the fallback) when that permission has not been granted.
+    private static func captureWithScreenCaptureKit(_ rect: CGRect) async -> CGImage? {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: true
+            )
+            guard let display = content.displays.first(where: { $0.frame.intersects(rect) })
+                ?? content.displays.first else { return nil }
+
+            // `sourceRect` is display-local (points) and must lie inside the display; the target
+            // bounds are global screen coordinates.
+            let local = CGRect(
+                x: rect.minX - display.frame.minX,
+                y: rect.minY - display.frame.minY,
+                width: rect.width,
+                height: rect.height
+            ).intersection(CGRect(origin: .zero, size: display.frame.size))
+            guard local.width >= 1, local.height >= 1 else { return nil }
+
+            // Output dimensions are pixels, so scale the point-sized rect by the display factor.
+            let scale = display.frame.width > 0 ? CGFloat(display.width) / display.frame.width : 1
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let configuration = SCStreamConfiguration()
+            configuration.sourceRect = local
+            configuration.width = max(1, Int(local.width * scale))
+            configuration.height = max(1, Int(local.height * scale))
+            configuration.showsCursor = false
+
+            return try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: configuration
+            )
+        } catch {
+            GhostLog.shared.debug(
+                "VisionOcrService: ScreenCaptureKit capture failed (rect=\(rect), error=\(error))"
+            )
+            return nil
+        }
     }
 
     // MARK: - Recognition

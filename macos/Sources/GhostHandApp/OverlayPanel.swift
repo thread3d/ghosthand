@@ -22,6 +22,18 @@ final class OverlayModel: ObservableObject {
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    // Focus transitions are the difference between "the overlay is up but keystrokes go to the
+    // app behind it" and a working prompt, so they are logged explicitly.
+    override func becomeKey() {
+        super.becomeKey()
+        GhostLog.shared.debug("UI: prompt panel became key (accepting typing)")
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        GhostLog.shared.debug("UI: prompt panel resigned key (no longer accepting typing)")
+    }
 }
 
 @MainActor
@@ -72,11 +84,18 @@ final class OverlayPanel {
     // MARK: - Lifecycle
 
     func show(target: AppTarget?) {
+        GhostLog.shared.debug("UI: show prompt — target=\(target?.processName ?? "none")")
         currentTarget = target
         resetForNewPrompt(target: target)
         positionPanel()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        logPanelState("after show")
+        // Re-check shortly after: a panel can be ordered front and then immediately lose key.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            self?.logPanelState("300ms after show")
+        }
     }
 
     func hide() {
@@ -85,19 +104,32 @@ final class OverlayPanel {
         model.isListening = false
         model.isRunning = false
         panel.orderOut(nil)
+        GhostLog.shared.debug("UI: prompt hidden")
+    }
+
+    /// Records enough panel state to tell "never shown" from "shown but unfocused".
+    private func logPanelState(_ phase: String) {
+        let screen = NSScreen.main.map { NSStringFromRect($0.frame) } ?? "none"
+        GhostLog.shared.debug(
+            "UI: panel \(phase) visible=\(panel.isVisible) key=\(panel.isKeyWindow) "
+                + "frame=\(NSStringFromRect(panel.frame)) screen=\(screen)"
+        )
     }
 
     func updateStatus(_ status: String, isError: Bool) {
+        GhostLog.shared.debug("UI: status\(isError ? " (error)" : "") = \(status)")
         model.status = status
         model.statusIsError = isError
     }
 
     func updateTarget(_ target: AppTarget) {
+        GhostLog.shared.debug("UI: target changed to \(target.processName) (\(target.windowTitle))")
         currentTarget = target
         setTargetText(target)
     }
 
     func beginRun(goal: String, target: AppTarget) {
+        GhostLog.shared.debug("UI: begin run '\(goal)' on \(target.processName)")
         currentTarget = target
         model.isRunning = true
         model.status = "Running: \(goal)"
@@ -106,6 +138,7 @@ final class OverlayPanel {
     }
 
     func finishRun(message: String, success: Bool) {
+        GhostLog.shared.debug("UI: finish run success=\(success) message=\(message)")
         model.isRunning = false
         model.status = (success ? "✓ " : "⚠ ") + message
         model.statusIsError = !success
@@ -150,11 +183,19 @@ final class OverlayPanel {
 
     private func submit() {
         let goal = model.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !goal.isEmpty else { return }
+        guard !goal.isEmpty else {
+            GhostLog.shared.debug(
+                "UI: submit ignored — prompt empty (raw length \(model.prompt.count)); "
+                    + "the text field probably never received focus."
+            )
+            return
+        }
+        GhostLog.shared.debug("UI: submit '\(goal)'")
         onSubmit(goal)
     }
 
     private func toggleListening() {
+        GhostLog.shared.debug("UI: mic toggled (listening=\(model.isListening))")
         if model.isListening {
             speechTask?.cancel()
             speechTask = nil
@@ -294,6 +335,20 @@ private struct OverlayView: View {
         )
         .padding(6)
         .onExitCommand(perform: onCancel)
-        .onAppear { promptFocused = true }
+        .onAppear {
+            promptFocused = true
+            GhostLog.shared.debug("UI: prompt view appeared; requesting field focus")
+        }
+        .onDisappear {
+            GhostLog.shared.debug("UI: prompt view disappeared")
+        }
+        .onChange(of: promptFocused) { _, focused in
+            GhostLog.shared.debug("UI: prompt field focus = \(focused)")
+        }
+        .onChange(of: model.prompt) { _, text in
+            // Length only: enough to prove typing reached the field without putting the
+            // user's instruction verbatim in the log on every keystroke.
+            GhostLog.shared.debug("UI: prompt text length = \(text.count)")
+        }
     }
 }

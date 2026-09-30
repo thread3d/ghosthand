@@ -31,6 +31,15 @@ public final class EventTapHotkeyService: HotkeyService {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var lastFlags: CGEventFlags = []
+    private var permissionRetryTimer: Timer?
+
+    /// Shows the macOS Accessibility consent dialog, which is also what registers the app in
+    /// System Settings › Privacy & Security › Accessibility with the current code identity.
+    /// Without this the user can toggle a stale entry and the permission never applies.
+    public static func requestAccessibilityPermission() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+    }
 
     /// Modifier key codes are delivered through `flagsChanged`; ignore any duplicate
     /// keyDown/keyUp so they are not mistaken for an intervening non-chord key.
@@ -45,8 +54,14 @@ public final class EventTapHotkeyService: HotkeyService {
 
     public init() {
         stateMachine = ChordStateMachine()
-        stateMachine.onTrigger = { [weak self] in self?.onHotkeyPressed?() }
-        stateMachine.onCancel = { [weak self] in self?.onKillSwitchTriggered?() }
+        stateMachine.onTrigger = { [weak self] in
+            GhostLog.shared.debug("Hotkey: Ctrl+Option chord triggered.")
+            self?.onHotkeyPressed?()
+        }
+        stateMachine.onCancel = { [weak self] in
+            GhostLog.shared.debug("Hotkey: Esc kill switch triggered.")
+            self?.onKillSwitchTriggered?()
+        }
     }
 
     deinit {
@@ -77,8 +92,14 @@ public final class EventTapHotkeyService: HotkeyService {
                 + "(System Settings > Privacy & Security > Accessibility) and restart GhostHand. "
                 + "Global hotkeys are disabled until then."
             )
+            // Ask macOS to present the consent dialog, then poll: the user may grant while the
+            // app is running, and the hotkey must start working without a relaunch.
+            Self.requestAccessibilityPermission()
+            schedulePermissionRetry()
             return
         }
+
+        cancelPermissionRetry()
 
         eventTap = tap
         runLoopSource = CFMachPortCreateRunLoopSource(nil, tap, 0)
@@ -90,6 +111,7 @@ public final class EventTapHotkeyService: HotkeyService {
     }
 
     public func stop() {
+        cancelPermissionRetry()
         if let eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
         }
@@ -169,6 +191,25 @@ public final class EventTapHotkeyService: HotkeyService {
 
     private func timestampMs(_ event: CGEvent) -> Int64 {
         Int64(event.timestamp / 1_000_000)
+    }
+
+    /// Re-checks Accessibility every few seconds so granting it mid-session installs the tap.
+    private func schedulePermissionRetry() {
+        guard permissionRetryTimer == nil else { return }
+        GhostLog.shared.info(
+            "Will re-check Accessibility every 3s and install the hotkey as soon as it is granted."
+        )
+        permissionRetryTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            guard let self, AXIsProcessTrusted() else { return }
+            GhostLog.shared.info("Accessibility permission detected; installing the keyboard event tap.")
+            self.cancelPermissionRetry()
+            self.start()
+        }
+    }
+
+    private func cancelPermissionRetry() {
+        permissionRetryTimer?.invalidate()
+        permissionRetryTimer = nil
     }
 }
 
