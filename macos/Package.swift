@@ -15,6 +15,7 @@ let package = Package(
         .library(name: "GhostHandCore", targets: ["GhostHandCore"]),
         .library(name: "GhostHandPlatform", targets: ["GhostHandPlatform"]),
         .executable(name: "ghosthand", targets: ["GhostHandCLI"]),
+        .executable(name: "GhostHandApp", targets: ["GhostHandApp"]),
     ],
     targets: [
         .target(
@@ -30,6 +31,11 @@ let package = Package(
             name: "GhostHandCLI",
             dependencies: ["GhostHandCore", "GhostHandPlatform"],
             path: "Sources/GhostHandCLI"
+        ),
+        .executableTarget(
+            name: "GhostHandApp",
+            dependencies: ["GhostHandCore", "GhostHandPlatform"],
+            path: "Sources/GhostHandApp"
         ),
         .testTarget(
             name: "GhostHandCoreTests",
