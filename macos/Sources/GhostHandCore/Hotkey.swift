@@ -84,9 +84,13 @@ public final class ChordStateMachine {
             return
         }
 
-        // Intervening non-chord key was pressed.
-        interrupted = true
-        chordArmed = false
+        // Intervening non-chord key was pressed while a chord modifier is held.
+        // Ordinary typing (no modifier down) must not latch `interrupted`, or the next
+        // chord would be silently ignored until a modifier is pressed and released.
+        if ctrlDown || winDown {
+            interrupted = true
+            chordArmed = false
+        }
 
         // Esc while running triggers cancel (kill switch).
         if event.keyCode == Self.vkEscape && isRunActive {

@@ -216,6 +216,30 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertTrue(reason?.lowercased().contains("prohibited") ?? false)
     }
 
+    func testRS11_TypedDeletionTextOnTypeAndEnter_IsProhibited() {
+        // TypeAndEnter carries its payload in textValue too; it must be inspected just like
+        // a plain TypeText action.
+        let decision = AgentDecision(
+            operation: .typeAndEnter,
+            targetId: "e1",
+            targetLabel: "Search Box",
+            textValue: "delete the file")
+
+        let reason = policy.isActionProhibited(decision: decision, target: nil, goal: "search")
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.lowercased().contains("prohibited") ?? false)
+    }
+
+    func testRS11_BenignTypeAndEnterText_IsAllowed() {
+        let decision = AgentDecision(
+            operation: .typeAndEnter,
+            targetId: "e1",
+            targetLabel: "Search Box",
+            textValue: "hello world")
+
+        XCTAssertNil(policy.isActionProhibited(decision: decision, target: nil, goal: "search"))
+    }
+
     func testRS11_DeletionInTargetValue_IsProhibited() {
         let decision = AgentDecision(operation: .click, targetId: "e1")
         let element = AccessibilityElement(

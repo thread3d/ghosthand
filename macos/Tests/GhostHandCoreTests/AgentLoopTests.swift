@@ -121,6 +121,16 @@ private final class FakeConfirmationPrompt: ConfirmationPrompt {
     }
 }
 
+private final class FakeWindowTracker: WindowTracker {
+    var activeTarget: AppTarget?
+    private(set) var queryCount = 0
+
+    func getActiveTarget(current: AppTarget) -> AppTarget? {
+        queryCount += 1
+        return activeTarget
+    }
+}
+
 // MARK: - AgentLoop tests
 
 /// Port of the pure `AgentLoop` scenarios from `GhostHand.Tests.Agent.AgentLoopTests` and
@@ -213,6 +223,67 @@ final class AgentLoopTests: XCTestCase {
             XCTAssertEqual(audit.entries.first?.decisionType, "denied", processName)
             XCTAssertEqual(audit.entries.first?.appProcess, processName)
         }
+    }
+
+    // MARK: RS09 — a deny-listed app that becomes the target mid-run is refused
+
+    func testRS09_denyListedApp_afterWindowTrackerSwitch_failsWithoutReadingScreen() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel()
+        let executor = FakeActionExecutor()
+        let audit = FakeAuditLog()
+        let tracker = FakeWindowTracker()
+        tracker.activeTarget = AppTarget(processId: 4242, processName: "1password", windowTitle: "Vault")
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(),
+            riskPolicy: DefaultRiskPolicy(),
+            auditLog: audit,
+            windowTracker: tracker
+        )
+
+        let result = await loop.run(goal: "search for Adele", target: testTarget())
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertTrue(result.message?.contains("deny-list") ?? false, "Message was: \(result.message ?? "")")
+        XCTAssertEqual(reader.readCount, 0, "the denied app must not be read")
+        XCTAssertEqual(model.decideCount, 0)
+        XCTAssertEqual(executor.executed.count, 0)
+        XCTAssertTrue(audit.entries.contains(where: { $0.decisionType == "denied" && $0.appProcess == "1password" }))
+    }
+
+    func testRS09_denyListedApp_afterExecutorNewTarget_failsWithoutFurtherSteps() async {
+        let launched = AppTarget(
+            processId: 2000, processName: "bitwarden", windowTitle: "Vault", windowHandle: 0x2000)
+
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(decisions: [
+            AgentDecision(operation: .openApp, targetId: "vault", confidence: 0.99),
+            AgentDecision(operation: .done),
+        ])
+        let executor = FakeActionExecutor(result: .targetChanged(launched, "Launched Bitwarden"))
+        let audit = FakeAuditLog()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(),
+            riskPolicy: DefaultRiskPolicy(),
+            auditLog: audit
+        )
+
+        let result = await loop.run(goal: "open bitwarden", target: testTarget())
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertTrue(result.message?.contains("deny-list") ?? false, "Message was: \(result.message ?? "")")
+        XCTAssertEqual(executor.executed.count, 1)
+        XCTAssertEqual(model.decideCount, 1, "the run must stop before deciding again")
+        XCTAssertEqual(reader.readCount, 1, "the denied app must not be read")
+        XCTAssertTrue(audit.entries.contains(where: { $0.decisionType == "denied" && $0.appProcess == "bitwarden" }))
     }
 
     // MARK: Done + verified => completed

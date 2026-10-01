@@ -139,6 +139,38 @@ final class ChordStateMachineTests: XCTestCase {
         XCTAssertEqual(triggerCount, 1)
     }
 
+    // MARK: - HK08: ordinary typing before the chord must not block it
+
+    func testHK08_plainKeyBeforeChord_doesNotBlockChord() {
+        // Typing with no chord modifier held must not latch `interrupted`.
+        machine.process(.keyDown(0x41)) // 'a'
+        machine.process(.keyUp(0x41))
+        XCTAssertFalse(machine.currentState.interrupted)
+
+        machine.process(.keyDown(RawKeyEvent.vkLControl))
+        machine.process(.keyDown(RawKeyEvent.vkLWin))
+        machine.process(.keyUp(RawKeyEvent.vkLWin))
+        machine.process(.keyUp(RawKeyEvent.vkLControl))
+
+        XCTAssertEqual(triggerCount, 1)
+        XCTAssertEqual(cancelCount, 0)
+    }
+
+    func testHK08_plainKeyBeforeKillSwitchChord_stillCancelsWhileRunning() {
+        machine.isRunActive = true
+
+        machine.process(.keyDown(0x41))
+        machine.process(.keyUp(0x41))
+
+        machine.process(.keyDown(RawKeyEvent.vkLControl))
+        machine.process(.keyDown(RawKeyEvent.vkLWin))
+        machine.process(.keyUp(RawKeyEvent.vkLWin))
+        machine.process(.keyUp(RawKeyEvent.vkLControl))
+
+        XCTAssertEqual(triggerCount, 0)
+        XCTAssertEqual(cancelCount, 1)
+    }
+
     // MARK: - Port-only surface
 
     func testGenericVkControl_alsoCountsAsCtrlModifier() {

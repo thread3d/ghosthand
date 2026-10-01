@@ -148,7 +148,8 @@ public final class DefaultRiskPolicy: RiskPolicy {
             if !target.label.isBlank { textToInspect.append(target.label) }
             if !target.value.isBlank { textToInspect.append(target.value) }
         }
-        if decision.operation == .typeText, let text = decision.textValue, !text.isBlank {
+        if decision.operation == .typeText || decision.operation == .typeAndEnter,
+           let text = decision.textValue, !text.isBlank {
             textToInspect.append(text)
         }
 

@@ -107,15 +107,7 @@ public final class AgentLoop {
         }
 
         // Security check 2: deny-listed process (password managers).
-        if let denyReason = riskPolicy.isAppDenied(currentTarget) {
-            GhostLog.shared.warning("App deny-list triggered: \(denyReason)")
-            notifyStatus("Security policy refusal: \(denyReason)")
-            if let auditLog {
-                await auditLog.log(AuditLogEntry(
-                    goal: goal, operation: .askUser,
-                    appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
-                    decisionType: "denied", reason: denyReason))
-            }
+        if let denyReason = await denyListRefusal(goal: goal, target: currentTarget) {
             return .failed(steps: 0, history: history, error: denyReason)
         }
 
@@ -131,6 +123,11 @@ public final class AgentLoop {
                    tracked.windowHandle != currentTarget.windowHandle || tracked.processId != currentTarget.processId {
                     GhostLog.shared.info("Active target auto-switched to \(tracked.processName) ('\(tracked.windowTitle)')")
                     currentTarget = tracked
+                    // Security check: a deny-listed app must never be read or acted on, even when
+                    // the foreground window changed on its own.
+                    if let denyReason = await denyListRefusal(goal: goal, target: currentTarget) {
+                        return .failed(steps: step, history: history, error: denyReason)
+                    }
                     loopGuard.reset()
                     onTargetChanged?(currentTarget)
                     notifyStatus("Target active: \(currentTarget.processName) (\"\(currentTarget.windowTitle)\")")
@@ -146,7 +143,7 @@ public final class AgentLoop {
                     notifyStatus("Waiting for screen to update... (stall \(loopGuard.consecutiveStalls)/\(options.maxConsecutiveStalls))")
                     try await Task.sleep(nanoseconds: 1_500_000_000)
                     elements = try await screenReader.readElements(target: currentTarget)
-                    if loopGuard.recordObservation(elements), loopGuard.isStalled {
+                    if loopGuard.recordObservation(elements) {
                         GhostLog.shared.warning("Screen still unchanged after retry stall \(loopGuard.consecutiveStalls).")
                         notifyStatus("Screen state did not change — task may be complete or requires manual intervention.")
                         return .stalled(steps: step, history: history,
@@ -254,6 +251,10 @@ public final class AgentLoop {
                 if let newTarget = result.newTarget {
                     GhostLog.shared.info("Target switched from '\(currentTarget.processName)' to '\(newTarget.processName)'")
                     currentTarget = newTarget
+                    // Security check: never adopt a deny-listed app as the new target.
+                    if let denyReason = await denyListRefusal(goal: goal, target: currentTarget) {
+                        return .failed(steps: step, history: history, error: denyReason)
+                    }
                     loopGuard.reset()
                     onTargetChanged?(currentTarget)
                     notifyStatus("Switched target to \(currentTarget.processName) (\"\(currentTarget.windowTitle)\")")
@@ -271,6 +272,22 @@ public final class AgentLoop {
             notifyStatus("Error: \(error.localizedDescription)")
             return .failed(steps: step, history: history, error: error.localizedDescription)
         }
+    }
+
+    /// Checks a target against the app deny-list. When denied, records the refusal in the
+    /// audit log and status channel and returns the reason; returns nil when the app is allowed.
+    /// Re-run after every target transition so a deny-listed app is never read or acted on.
+    private func denyListRefusal(goal: String, target: AppTarget) async -> String? {
+        guard let denyReason = riskPolicy.isAppDenied(target) else { return nil }
+        GhostLog.shared.warning("App deny-list triggered: \(denyReason)")
+        notifyStatus("Security policy refusal: \(denyReason)")
+        if let auditLog {
+            await auditLog.log(AuditLogEntry(
+                goal: goal, operation: .askUser,
+                appProcess: target.processName, appTitle: target.windowTitle,
+                decisionType: "denied", reason: denyReason))
+        }
+        return denyReason
     }
 
     private func notifyStatus(_ message: String) {

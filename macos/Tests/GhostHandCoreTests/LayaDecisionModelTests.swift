@@ -138,6 +138,52 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertEqual(LayaDecisionModel.capCandidateChoices(choices, limit: 90), choices)
     }
 
+    // MARK: - Element IDs containing the key delimiter
+
+    func testColonInElementId_roundTripsThroughTypedActionKeys() throws {
+        // A `:` in the element id would otherwise be read back as the id/text delimiter,
+        // so it must survive encoding in the key and decoding in the parser.
+        let element = AccessibilityElement(id: "field:1", role: "Edit", label: "Search")
+        let choices = LayaDecisionModel.buildCandidateChoices(
+            goal: "write hello into the search field", elements: [element])
+
+        let typeKey = try XCTUnwrap(
+            choices.keys.first { $0.hasPrefix("type:") && !$0.hasPrefix("type_and_enter:") })
+        let enterKey = try XCTUnwrap(choices.keys.first { $0.hasPrefix("type_and_enter:") })
+        XCTAssertTrue(typeKey.contains("%3A"), "Expected the id delimiter to be encoded: \(typeKey)")
+
+        let typed = LayaDecisionModel.parseActionDecision(typeKey, confidence: 0.9, elements: [element])
+        XCTAssertEqual(typed.operation, .typeText)
+        XCTAssertEqual(typed.targetId, "field:1")
+        XCTAssertEqual(typed.targetLabel, "Search")
+        XCTAssertFalse(typed.textValue?.isEmpty ?? true)
+
+        let entered = LayaDecisionModel.parseActionDecision(enterKey, confidence: 0.9, elements: [element])
+        XCTAssertEqual(entered.operation, .typeAndEnter)
+        XCTAssertEqual(entered.targetId, "field:1")
+        XCTAssertEqual(entered.targetLabel, "Search")
+        XCTAssertFalse(entered.textValue?.isEmpty ?? true)
+    }
+
+    func testElementIdWithoutDelimiter_keepsLegacyKeyFormat() {
+        let element = AccessibilityElement(id: "e1", role: "Edit", label: "Search")
+        let choices = LayaDecisionModel.buildCandidateChoices(
+            goal: "write hello into notepad", elements: [element])
+
+        XCTAssertTrue(choices.keys.contains { $0.hasPrefix("type:e1:") },
+                      "Expected an unchanged key for a plain id; got \(choices.keys.filter { $0.hasPrefix("type") })")
+        XCTAssertTrue(choices.keys.contains { $0.hasPrefix("type_and_enter:e1:") })
+    }
+
+    func testEncodeDecodeElementId_handlesPercentAndColon() {
+        XCTAssertEqual(LayaDecisionModel.encodeElementId("e1"), "e1")
+        XCTAssertEqual(LayaDecisionModel.encodeElementId("a:b"), "a%3Ab")
+        XCTAssertEqual(LayaDecisionModel.encodeElementId("100%"), "100%25")
+        for raw in ["e1", "field:1", "a:b:c", "100%", "%3A", "a%3Ab"] {
+            XCTAssertEqual(LayaDecisionModel.decodeElementId(LayaDecisionModel.encodeElementId(raw)), raw)
+        }
+    }
+
     // MARK: - Decision mapping through a fake Laya client (no network)
 
     func testExecutesTopAction_evenWithLowConfidence() async throws {

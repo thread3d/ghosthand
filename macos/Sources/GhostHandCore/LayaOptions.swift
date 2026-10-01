@@ -27,6 +27,8 @@ public final class LayaOptions: @unchecked Sendable {
     public var minConfidence: Double = 0.0
     /// Maximum options in the next-action choice question (Laya caps a choice at 100).
     public var maxChoiceOptions: Int = 90
+    /// Floor for `maxChoiceOptions`: below this the cap would drop every per-element action.
+    public static let minimumMaxChoiceOptions = 20
     /// Start the local Laya server automatically when it is not already listening.
     public var autoStartServer: Bool = true
     /// Python interpreter with Laya's dependencies (empty = auto-detect).
@@ -58,7 +60,11 @@ public final class LayaOptions: @unchecked Sendable {
         if let raw = env["LAYA_MAX_RETRIES"], let value = Int(raw) { options.maxRetries = value }
         if let raw = env["LAYA_MAX_LEN"], let value = Int(raw) { options.maxLen = value }
         if let raw = env["LAYA_HEAD_MAX_LEN"], let value = Int(raw) { options.headMaxLen = value }
-        if let raw = env["LAYA_MAX_CHOICE_OPTIONS"], let value = Int(raw) { options.maxChoiceOptions = value }
+        if let raw = env["LAYA_MAX_CHOICE_OPTIONS"], let value = Int(raw) {
+            // Never let a small positive value silently starve the choice question: the cap must
+            // leave room for the standard controls plus at least some per-element actions.
+            options.maxChoiceOptions = max(LayaOptions.minimumMaxChoiceOptions, value)
+        }
         if let raw = env["LAYA_MIN_CONFIDENCE"], let value = Double(raw) { options.minConfidence = value }
         if let raw = env["LAYA_AUTOSTART"], let value = Bool(raw) { options.autoStartServer = value }
         if let raw = env["LAYA_STARTUP_TIMEOUT_SECONDS"], let value = Int(raw) { options.startupTimeoutSeconds = value }
