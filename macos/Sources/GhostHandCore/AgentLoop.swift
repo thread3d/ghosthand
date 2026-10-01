@@ -61,6 +61,10 @@ public final class AgentLoop {
     private let auditLog: AuditLog?
     private let windowTracker: WindowTracker?
 
+    /// How many consecutive unverified "done" decisions to tolerate before handing back to the
+    /// user. Without this the loop burns its whole stall budget re-deciding the same thing.
+    private static let maxInconclusiveDone = 3
+
     public var onStatusChanged: ((String) -> Void)?
     public var onStepCompleted: ((Int, AgentDecision, ActionResult) -> Void)?
     public var onTargetChanged: ((AppTarget) -> Void)?
@@ -90,6 +94,10 @@ public final class AgentLoop {
         var history: [String] = []
         let loopGuard = LoopGuard(maxConsecutiveStalls: options.maxConsecutiveStalls)
         var step = 0
+        var inconclusiveDoneStreak = 0
+        var executedActionCount = 0
+        var executedActionLastStep = false
+        var sawActionDrivenChange = false
         let runId = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12))
 
         GhostLog.shared.info("Starting AgentLoop for goal '\(goal)' on target '\(currentTarget.processName)' (DryRun: \(options.dryRun))")
@@ -139,34 +147,87 @@ public final class AgentLoop {
                 var elements = try await screenReader.readElements(target: currentTarget)
 
                 // 2. Stall check: wait and re-read once if the screen has not changed (may be loading).
-                if loopGuard.recordObservation(elements) {
+                let stalled = loopGuard.recordObservation(elements)
+                if executedActionLastStep, loopGuard.didChangeOnLastObservation {
+                    sawActionDrivenChange = true
+                }
+                if stalled {
                     GhostLog.shared.warning("Stall detected: \(loopGuard.consecutiveStalls) identical consecutive observations.")
                     notifyStatus("Waiting for screen to update... (stall \(loopGuard.consecutiveStalls)/\(options.maxConsecutiveStalls))")
                     try await Task.sleep(nanoseconds: 1_500_000_000)
                     elements = try await screenReader.readElements(target: currentTarget)
-                    if loopGuard.recordObservation(elements) {
+                    let stillStalled = loopGuard.recordObservation(elements)
+                    if executedActionLastStep, loopGuard.didChangeOnLastObservation {
+                        sawActionDrivenChange = true
+                    }
+                    if stillStalled {
                         GhostLog.shared.warning("Screen still unchanged after retry stall \(loopGuard.consecutiveStalls).")
                         notifyStatus("Screen state did not change — task may be complete or requires manual intervention.")
                         return .stalled(steps: step, history: history,
                                         reason: "Loop guard tripped: screen state did not change across actions.")
                     }
                 }
+                executedActionLastStep = false
 
                 // 3. Laya call A: next action + goal completion.
                 notifyStatus("\(stepPrefix): Choosing next action...")
                 let decision = try await decisionModel.decideNextAction(
                     goal: goal, target: currentTarget, elements: elements, history: history)
 
-                // 4. Done? Verify before declaring success.
+                // 4. Done? Verify before declaring success. A "done" that fails verification is
+                //    NOT an action: executing it burns a step without changing anything and
+                //    quietly feeds the stall guard. Record it for the model, and stop once the
+                //    model keeps insisting without evidence instead of flailing for 15 steps.
                 if decision.operation == .done {
                     notifyStatus("Verifying goal completion...")
-                    if try await decisionModel.verifyCompletion(
-                        goal: goal, target: currentTarget, elements: elements, history: history) {
+                    let verified = try await decisionModel.verifyCompletion(
+                        goal: goal, target: currentTarget, elements: elements, history: history)
+
+                    // A completion claim needs evidence we can actually see: an action we executed
+                    // must have been followed by a change on screen (or a target switch). Without
+                    // that, "done" is just the model's opinion — which is how "whereis Laya"
+                    // reported Completed twice on a static Finder window, once after five no-op
+                    // actions and once on the very first step with no actions at all.
+                    let hasEvidence = sawActionDrivenChange
+                    if verified && hasEvidence {
                         notifyStatus("Goal successfully completed!")
                         return .completed(steps: step, history: history)
                     }
-                    GhostLog.shared.info("Done operation verification was inconclusive. Continuing loop.")
+                    if verified {
+                        GhostLog.shared.warning(
+                            "Verification agreed but \(executedActionCount) action(s) never changed "
+                                + "the screen — treating completion as unverified."
+                        )
+                    }
+
+                    inconclusiveDoneStreak += 1
+                    GhostLog.shared.info(
+                        "Done verification was inconclusive "
+                            + "(\(inconclusiveDoneStreak)/\(Self.maxInconclusiveDone)); not executing it."
+                    )
+                    if let auditLog {
+                        await auditLog.log(AuditLogEntry(
+                            runId: runId, step: step, goal: goal, operation: .done,
+                            appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
+                            decisionType: "inconclusive",
+                            reason: "Model reported done but verification found no evidence."))
+                    }
+                    history.append("done -> not verified (no evidence)")
+
+                    if inconclusiveDoneStreak >= Self.maxInconclusiveDone {
+                        // Keep this short: the overlay status is a two-line label, and the
+                        // actionable half used to be the part that got truncated.
+                        let reason = "Couldn't confirm the task after \(Self.maxInconclusiveDone) "
+                            + "tries — the model said 'done' without evidence. Try rephrasing, or "
+                            + "take over."
+                        notifyStatus(reason)
+                        return .needsHumanInput(steps: step, history: history, reason: reason)
+                    }
+                    continue
                 }
+
+                // Any real action means the model is still trying something new.
+                inconclusiveDoneStreak = 0
 
                 // 5. AskUser / low confidence.
                 if decision.operation == .askUser {
@@ -253,6 +314,10 @@ public final class AgentLoop {
                         + "(\(decision.targetLabel ?? "")) -> \(outcome)"
                 )
                 onStepCompleted?(step, decision, result)
+                if result.success {
+                    executedActionCount += 1
+                    executedActionLastStep = true
+                }
 
                 if !result.success {
                     let err = result.errorMessage ?? result.error ?? "Action execution failed."
@@ -260,7 +325,8 @@ public final class AgentLoop {
                     return .failed(steps: step, history: history, error: err)
                 }
 
-                // Dynamic target transition upon launching an app/URL.
+                // Dynamic target transition upon launching an app/URL. This is observable
+                // progress in its own right, so it counts as completion evidence.
                 if let newTarget = result.newTarget {
                     GhostLog.shared.info("Target switched from '\(currentTarget.processName)' to '\(newTarget.processName)'")
                     currentTarget = newTarget
@@ -269,6 +335,7 @@ public final class AgentLoop {
                         return .failed(steps: step, history: history, error: denyReason)
                     }
                     loopGuard.reset()
+                    sawActionDrivenChange = true
                     onTargetChanged?(currentTarget)
                     notifyStatus("Switched target to \(currentTarget.processName) (\"\(currentTarget.windowTitle)\")")
                 }

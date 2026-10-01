@@ -14,6 +14,10 @@ public final class LoopGuard {
     public var consecutiveStalls: Int { _consecutiveStalls }
     public var isStalled: Bool { _consecutiveStalls >= maxConsecutiveStalls }
 
+    /// True when the most recent observation differed from the one before it. The first
+    /// observation has no baseline, so it reports false.
+    public private(set) var didChangeOnLastObservation = false
+
     public init(maxConsecutiveStalls: Int = 10) {
         self.maxConsecutiveStalls = maxConsecutiveStalls
     }
@@ -24,7 +28,9 @@ public final class LoopGuard {
         let currentSignature = Self.computeSignature(elements)
         if let last = lastStateSignature, currentSignature == last {
             _consecutiveStalls += 1
+            didChangeOnLastObservation = false
         } else {
+            didChangeOnLastObservation = lastStateSignature != nil
             _consecutiveStalls = 1
         }
         lastStateSignature = currentSignature
@@ -34,6 +40,7 @@ public final class LoopGuard {
     public func reset() {
         lastStateSignature = nil
         _consecutiveStalls = 0
+        didChangeOnLastObservation = false
     }
 
     private static func computeSignature(_ elements: [AccessibilityElement]) -> String {

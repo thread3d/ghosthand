@@ -142,16 +142,11 @@ final class OverlayPanel {
         model.isRunning = false
         model.status = (success ? "✓ " : "⚠ ") + message
         model.statusIsError = !success
-        if !success {
-            panel.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        } else {
-            // Give the user a moment to read the success message, then dismiss.
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                self?.panel.orderOut(nil)
-            }
-        }
+        // Keep the result on screen for both outcomes. This used to auto-dismiss after 1.2s,
+        // which hid the outcome entirely — including a "success" the user had no reason to
+        // believe. Close (or Esc) dismisses it.
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: - Actions

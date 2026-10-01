@@ -83,6 +83,25 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
             return AgentDecision(operation: .askUser, reason: "Could not parse decision")
         }
 
+        // Refuse to guess. `minConfidence` is also sent to Laya as an abstention hint, but the
+        // server can still return a low-probability choice, so enforce the floor here: a 1% guess
+        // must never be executed as if it were a decision. 0.0 keeps Jarvis mode's zero-friction
+        // behaviour unchanged.
+        if options.minConfidence > 0, action.confidence < options.minConfidence {
+            GhostLog.shared.info(
+                "Top choice '\(action.choice)' at \(LayaDecisionModel.percent(action.confidence)) is "
+                    + "below the confidence floor \(LayaDecisionModel.percent(options.minConfidence)); "
+                    + "asking the user instead of guessing."
+            )
+            return AgentDecision(
+                operation: .askUser,
+                reason: "Not confident enough to act: the best guess was '\(action.choice)' at "
+                    + "\(LayaDecisionModel.percent(action.confidence)), below the "
+                    + "\(LayaDecisionModel.percent(options.minConfidence)) floor. Rephrase the task "
+                    + "or take over."
+            )
+        }
+
         // Execute the chosen action directly as decided by Laya.
         GhostLog.shared.info(
             "Laya selected action: '\(action.choice)' (probability: \(LayaDecisionModel.percent(action.confidence)))"

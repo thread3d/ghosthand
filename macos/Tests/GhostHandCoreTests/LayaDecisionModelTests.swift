@@ -300,6 +300,43 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertTrue(client.requests.isEmpty, "control-flow actions should not call Laya")
     }
 
+    // MARK: - Confidence floor
+
+    /// A top choice below the configured floor must become askUser, never an executed guess.
+    func testLowConfidenceChoice_asksTheUser_insteadOfActing() async throws {
+        let response = try Self.decode(#"""
+        {"answers":{"nextAction":{"choice":"scroll:down","confidence":0.01},"goalAchieved":{"noul":0.02}}}
+        """#)
+        let options = LayaOptions()
+        options.minConfidence = 0.35
+        let model = LayaDecisionModel(client: FakeLayaClient(response: response), options: options)
+
+        let decision = try await model.decideNextAction(
+            goal: "whereis Laya",
+            target: AppTarget(processId: 1, processName: "Finder"),
+            elements: [AccessibilityElement(id: "e1", role: "Button", label: "Search")],
+            history: [])
+
+        XCTAssertEqual(decision.operation, .askUser)
+        XCTAssertTrue(decision.reason?.contains("floor") ?? false, "Reason: \(decision.reason ?? "")")
+    }
+
+    /// The floor is off by default, so Jarvis mode still honours the model's choice.
+    func testLowConfidenceChoice_isHonoured_whenFloorDisabled() async throws {
+        let response = try Self.decode(#"""
+        {"answers":{"nextAction":{"choice":"scroll:down","confidence":0.01},"goalAchieved":{"noul":0.02}}}
+        """#)
+        let model = LayaDecisionModel(client: FakeLayaClient(response: response), options: LayaOptions())
+
+        let decision = try await model.decideNextAction(
+            goal: "whereis Laya",
+            target: AppTarget(processId: 1, processName: "Finder"),
+            elements: [AccessibilityElement(id: "e1", role: "Button", label: "Search")],
+            history: [])
+
+        XCTAssertEqual(decision.operation, .scrollDown)
+    }
+
     private static func decode(_ json: String) throws -> LayaResponse {
         try JSONDecoder().decode(LayaResponse.self, from: Data(json.utf8))
     }
