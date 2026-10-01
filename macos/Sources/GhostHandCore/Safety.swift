@@ -46,6 +46,10 @@ public final class RiskPolicyOptions: @unchecked Sendable {
 
 public struct AuditLogEntry: Codable, Sendable {
     public var timestamp: Date
+    /// Correlates every entry produced by a single `AgentLoop.run` invocation.
+    public var runId: String?
+    /// Agent-loop step that produced this entry (0 for pre-loop policy refusals).
+    public var step: Int?
     public var goal: String
     public var operation: AgentOperation
     public var targetId: String?
@@ -59,6 +63,8 @@ public struct AuditLogEntry: Codable, Sendable {
 
     public init(
         timestamp: Date = Date(),
+        runId: String? = nil,
+        step: Int? = nil,
         goal: String = "",
         operation: AgentOperation,
         targetId: String? = nil,
@@ -70,6 +76,8 @@ public struct AuditLogEntry: Codable, Sendable {
         reason: String? = nil
     ) {
         self.timestamp = timestamp
+        self.runId = runId
+        self.step = step
         self.goal = goal
         self.operation = operation
         self.targetId = targetId
@@ -82,7 +90,7 @@ public struct AuditLogEntry: Codable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case timestamp, goal, operation, targetId, targetLabel, targetRole
+        case timestamp, runId, step, goal, operation, targetId, targetLabel, targetRole
         case appProcess, appTitle, decisionType, reason
     }
 }
@@ -130,10 +138,11 @@ public final class DefaultRiskPolicy: RiskPolicy {
 
     public func isGoalProhibited(_ goal: String) -> String? {
         guard !goal.isBlank else { return nil }
-        let range = NSRange(goal.startIndex..<goal.endIndex, in: goal)
-        guard let match = prohibitedRegex.firstMatch(in: goal, options: [], range: range),
-              let matchRange = Range(match.range, in: goal) else { return nil }
-        let term = String(goal[matchRange])
+        let normalized = Self.normalizeForMatch(goal)
+        let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+        guard let match = prohibitedRegex.firstMatch(in: normalized, options: [], range: range),
+              let matchRange = Range(match.range, in: normalized) else { return nil }
+        let term = String(normalized[matchRange])
         return "Prohibited by safety policy: Deletion tasks (matching '\(term)') are strictly prohibited."
     }
 
@@ -154,13 +163,31 @@ public final class DefaultRiskPolicy: RiskPolicy {
         }
 
         for text in textToInspect {
-            let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            guard let match = prohibitedRegex.firstMatch(in: text, options: [], range: range),
-                  let matchRange = Range(match.range, in: text) else { continue }
-            let term = String(text[matchRange])
+            let normalized = Self.normalizeForMatch(text)
+            let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+            guard let match = prohibitedRegex.firstMatch(in: normalized, options: [], range: range),
+                  let matchRange = Range(match.range, in: normalized) else { continue }
+            let term = String(normalized[matchRange])
             let label = target?.displayLabel ?? decision.targetLabel ?? ""
             return "Prohibited by safety policy: Action '\(decision.operation.rawValue)' on '\(label)' matches deletion term '\(term)'."
         }
         return nil
+    }
+
+    /// Normalises text before deletion-term matching: strips zero-width / bidirectional
+    /// control characters that could smuggle a prohibited word past the regex
+    /// (e.g. "del\u{200B}ete"), then applies Unicode NFC so decomposed forms also match.
+    static func normalizeForMatch(_ text: String) -> String {
+        var filtered = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF,
+                 0x202A, 0x202B, 0x202C, 0x202D, 0x202E:
+                continue
+            default:
+                filtered.append(scalar)
+            }
+        }
+        return String(filtered).precomposedStringWithCanonicalMapping
     }
 }

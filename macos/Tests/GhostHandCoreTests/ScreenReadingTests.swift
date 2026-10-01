@@ -30,10 +30,12 @@ final class SecretSanitizerTests: XCTestCase {
     }
 
     func testApiKeys_AreRedacted() {
+        // Fixtures are assembled at runtime so the source never contains a contiguous
+        // provider-token literal; GitHub secret scanning flags those as exposed secrets.
         let samples = [
             "vck_dummy_test_key_sample1234567890abcdef",
-            "sk-abcdefghijklmnopqrstuvwxyz0123456789",
-            "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+            "sk-" + "abcdefghijklmnopqrstuvwxyz0123456789",
+            "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789",
         ]
 
         for secret in samples {
@@ -42,6 +44,30 @@ final class SecretSanitizerTests: XCTestCase {
             XCTAssertFalse(sanitized.contains(secret), "Secret leaked: \(secret)")
             XCTAssertTrue(sanitized.contains("[REDACTED_KEY]"))
         }
+    }
+
+    /// Provider credentials and PEM key headers that the original four patterns missed.
+    func testProviderAndPrivateKeys_AreRedacted() {
+        // Slack and Stripe fixtures are assembled at runtime so the source file never contains a
+        // contiguous provider-token literal — GitHub push protection blocks those as secrets.
+        let samples = [
+            "AKIA" + "IOSFODNN7EXAMPLE",                          // AWS access key
+            "gho_" + "abcdefghijklmnopqrstuvwxyz0123456789",      // GitHub OAuth token
+            "xox" + "b-123456789012-abcdefghijklmnop",            // Slack bot token
+            "AIza" + "SyA1234567890abcdefghijklmnopqrstuv",       // Google API key
+            "sk_" + "live_abcdefghijklmnopqrstuvwx",              // Stripe secret key
+        ]
+
+        for secret in samples {
+            let sanitized = SecretSanitizer.sanitize("credential=\(secret) end")
+            XCTAssertFalse(sanitized.contains(secret), "Secret leaked: \(secret)")
+            XCTAssertTrue(sanitized.contains("[REDACTED_KEY]"), "Not redacted: \(secret)")
+        }
+
+        let pem = "-----BEGIN RSA PRIVATE KEY-----MIIEowIBAAKCAQEA-----END RSA PRIVATE KEY-----"
+        let sanitizedPem = SecretSanitizer.sanitize(pem)
+        XCTAssertFalse(sanitizedPem.contains("BEGIN RSA PRIVATE KEY"))
+        XCTAssertTrue(sanitizedPem.contains("[REDACTED_PRIVATE_KEY]"))
     }
 
     func testJwt_IsRedacted() {

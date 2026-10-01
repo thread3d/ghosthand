@@ -158,9 +158,8 @@ public final class MacWindowCaptureService: WindowTracker {
             }
 
             var bounds = CGRect.zero
-            if let rawBounds = info[kCGWindowBounds as String],
-               CFGetTypeID(rawBounds as AnyObject) == CFDictionaryGetTypeID() {
-                CGRectMakeWithDictionaryRepresentation(rawBounds as! CFDictionary, &bounds)
+            if let rawBounds = info[kCGWindowBounds as String] as? NSDictionary {
+                CGRectMakeWithDictionaryRepresentation(rawBounds as CFDictionary, &bounds)
             }
             // Ignore zero-size shadow/helper windows.
             guard bounds.width >= 1, bounds.height >= 1 else { continue }
@@ -195,7 +194,10 @@ public final class MacWindowCaptureService: WindowTracker {
               CFGetTypeID(windowValue) == AXUIElementGetTypeID() else { return nil }
 
         var titleValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(windowValue as! AXUIElement, kAXTitleAttribute as CFString, &titleValue) == .success,
+        // The CFTypeID check above already validated the dynamic type.
+        // swiftlint:disable:next force_cast
+        let window = windowValue as! AXUIElement
+        guard AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue) == .success,
               let title = titleValue as? String else { return nil }
 
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
