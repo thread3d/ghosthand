@@ -1,11 +1,12 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 import GhostHandCore
 import GhostHandPlatform
 
 // GhostHand CLI (macOS) — port of GhostHand.Cli.Program.
-// Commands: check | snapshot | dry-run | run
+// Commands: check | snapshot | ocr | dry-run | run
 //
 // Top-level code: `await` is permitted in SwiftPM's main.swift.
 
@@ -20,6 +21,9 @@ enum CLIRunner {
 
     static func run(_ args: [String]) async -> Int32 {
         EnvLoader.load()
+        if args.contains("--verbose") {
+            GhostLog.shared.minimumLevel = .debug
+        }
         Console.bold("GhostHand (macOS) CLI Diagnostic Tool v\(version)")
         print("")
 
@@ -31,6 +35,7 @@ enum CLIRunner {
         switch command {
         case "check": return await runCheck()
         case "snapshot": return await runSnapshot(args)
+        case "ocr": return await runOcr(args)
         case "dry-run", "run": return await runAgent(args)
         default:
             Console.red("Unknown command: '\(command)'")
@@ -45,6 +50,7 @@ enum CLIRunner {
         print("Commands:")
         print("  check                 Verify toolchain, Accessibility permission and the local Laya model")
         print("  snapshot [pid|name]   Capture and display the accessibility element tree of the frontmost window")
+        print("  ocr [pid|name]        Verify Screen Recording permission and OCR the target window")
         print("  dry-run [goal]        Run a task without executing actions (simulated)")
         print("  run [goal] --live     Run a task with live execution (real input)")
         print("")
@@ -52,6 +58,7 @@ enum CLIRunner {
         print("  --live                Execute actions for real (default is dry-run)")
         print("  --target <name|pid>   Target a specific running application")
         print("  --yes                 Auto-approve any safety confirmation (testing only)")
+        print("  --verbose             Enable debug logging (shows OCR capture path, AX walk details)")
     }
 
     // MARK: - check
@@ -99,7 +106,10 @@ enum CLIRunner {
         print("\nRunning a test decision through Laya...")
         let client = LayaClient(options: options)
         let request = LayaRequest(
-            state: "System diagnostic report: Laya is running locally on this Mac, the decision service is healthy, and every check passed. Status: operational.",
+            state: .string(
+                "System diagnostic report: Laya is running locally on this Mac, the decision "
+                    + "service is healthy, and every check passed. Status: operational."
+            ),
             questions: [
                 "operational": .noul("Does the report say the status is operational?"),
                 "nextStep": .choice(
@@ -147,26 +157,7 @@ enum CLIRunner {
         print("GhostHand Window Snapshot")
         print(String(repeating: "-", count: 80))
 
-        var target: AppTarget?
-        if args.count > 1, !args[1].isBlank, !args[1].hasPrefix("--") {
-            let query = args[1]
-            if let pid = Int32(query) {
-                target = MacWindowCaptureService.captureWindow(processId: pid)
-            } else {
-                target = MacWindowCaptureService.captureWindow(processName: query)
-            }
-            if target == nil {
-                Console.yellow("Could not find an active window for '\(query)'. Falling back to the frontmost window.")
-            }
-        }
-
-        if target == nil {
-            print("Focus the window you wish to capture. Capturing in 2 seconds...")
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            target = MacWindowCaptureService.captureCurrentForegroundWindow()
-        }
-
-        guard let target else {
+        guard let target = await resolveTarget(args) else {
             Console.red("Failed to capture a target window.")
             return 1
         }
@@ -174,7 +165,10 @@ enum CLIRunner {
         Console.cyan("Target window: \"\(target.windowTitle)\"")
         print("Process: \(target.processName) (PID \(target.processId))")
         print("Bundle: \(target.bundleIdentifier ?? "unknown")")
-        print("Bounds: \(Int(target.bounds.width))x\(Int(target.bounds.height)) at (\(Int(target.bounds.minX)), \(Int(target.bounds.minY)))")
+        print(
+            "Bounds: \(Int(target.bounds.width))x\(Int(target.bounds.height)) "
+                + "at (\(Int(target.bounds.minX)), \(Int(target.bounds.minY)))"
+        )
 
         print("\nTraversing the accessibility tree...")
         let start = Date()
@@ -211,6 +205,86 @@ enum CLIRunner {
             }
         }
         print(String(repeating: "-", count: 80))
+        return 0
+    }
+
+    // MARK: - target resolution
+
+    /// Resolves an optional `[pid|name]` argument, falling back to the frontmost window after a
+    /// short delay so the user can focus the window they mean.
+    private static func resolveTarget(_ args: [String]) async -> AppTarget? {
+        var target: AppTarget?
+        if args.count > 1, !args[1].isBlank, !args[1].hasPrefix("--") {
+            let query = args[1]
+            if let pid = Int32(query) {
+                target = MacWindowCaptureService.captureWindow(processId: pid)
+            } else {
+                target = MacWindowCaptureService.captureWindow(processName: query)
+            }
+            if target == nil {
+                Console.yellow("Could not find an active window for '\(query)'. Falling back to the frontmost window.")
+            }
+        }
+
+        if target == nil {
+            print("Focus the window you wish to capture. Capturing in 2 seconds...")
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            target = MacWindowCaptureService.captureCurrentForegroundWindow()
+        }
+        return target
+    }
+
+    // MARK: - ocr
+
+    /// Diagnostic for the OCR fallback: verifies Screen Recording permission and runs Vision OCR
+    /// over the target window. The fallback only fires when the accessibility tree is sparse, so
+    /// without this command the capture path is easy to break unnoticed.
+    static func runOcr(_ args: [String]) async -> Int32 {
+        print("GhostHand Vision OCR Diagnostic")
+        print(String(repeating: "-", count: 80))
+
+        // Screen Recording is a separate TCC grant from Accessibility.
+        let granted = CGPreflightScreenCaptureAccess()
+        if granted {
+            Console.green("Screen Recording permission: GRANTED")
+        } else {
+            Console.yellow("Screen Recording permission: NOT GRANTED")
+            Console.yellow(
+                "  -> System Settings > Privacy & Security > Screen Recording > "
+                    + "enable your terminal / GhostHand.app"
+            )
+            // Surfaces the system prompt once; returns immediately either way.
+            _ = CGRequestScreenCaptureAccess()
+        }
+
+        guard let target = await resolveTarget(args) else {
+            Console.red("Failed to capture a target window.")
+            return 1
+        }
+        Console.cyan(
+            "Target window: \"\(target.windowTitle)\" "
+                + "(\(target.processName), PID \(target.processId))"
+        )
+
+        let start = Date()
+        let elements = await VisionOcrService().recognizeScreenArea(target.bounds)
+        let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+
+        guard !elements.isEmpty else {
+            Console.yellow("No text recognized in \(elapsed)ms.")
+            if !granted {
+                Console.yellow("  This is expected until Screen Recording is granted.")
+            }
+            return granted ? 1 : 2
+        }
+
+        Console.green("Recognized \(elements.count) line(s) in \(elapsed)ms")
+        for element in elements.prefix(40) {
+            print("  \(pad(element.id, 6)) \(element.displayLabel)")
+        }
+        if elements.count > 40 {
+            print("  ... and \(elements.count - 40) more")
+        }
         return 0
     }
 
@@ -328,7 +402,11 @@ enum CLIRunner {
 
         loop.onStatusChanged = { message in Console.yellow("[STATUS] \(message)") }
         loop.onStepCompleted = { step, decision, result in
-            Console.green("[STEP \(step)] Decision: \(decision.operation.rawValue) on '\(decision.targetLabel ?? decision.targetId ?? "")' (conf: \(String(format: "%.0f%%", decision.confidence * 100)))")
+            let confidence = String(format: "%.0f%%", decision.confidence * 100)
+            Console.green(
+                "[STEP \(step)] Decision: \(decision.operation.rawValue) on "
+                    + "'\(decision.targetLabel ?? decision.targetId ?? "")' (conf: \(confidence))"
+            )
             print("         Result: \(result.success ? "SUCCESS" : "FAIL") — \(result.message ?? result.error ?? "")\n")
         }
 

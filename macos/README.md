@@ -43,10 +43,57 @@ macOS gates the APIs GhostHand needs. Open **System Settings → Privacy & Secur
 | Permission | Why |
 |---|---|
 | **Accessibility** | Read the accessibility tree and post synthetic input; required for the global hotkey and automation. |
+| **Screen Recording** *(optional)* | OCR fallback for apps that expose no accessibility labels. Only used when the accessibility tree is sparse. |
 | **Microphone** *(optional)* | Voice commands. Prompts on first use. |
 | **Speech Recognition** *(optional)* | On-device dictation. Prompts on first use. |
 
-`ghosthand check` prints the current Accessibility state.
+`ghosthand check` prints the current Accessibility state. To check the OCR path specifically —
+including whether Screen Recording has been granted — run:
+
+```bash
+GhostHand.app/Contents/MacOS/ghosthand ocr          # OCR the frontmost window
+GhostHand.app/Contents/MacOS/ghosthand ocr Chrome   # OCR a named app's window
+```
+
+It exits `0` on success, `1` when the window cannot be captured, and `2` when no text was
+recognized (usually because Screen Recording is not granted yet).
+
+### Diagnostic logging
+
+The menu-bar menu has **Verbose Logging (debug)** and **Reveal Log in Finder**. Turning logging on
+writes debug-level detail to:
+
+```
+~/Library/Logs/GhostHand/ghosthand.log
+```
+
+The setting is remembered across launches on purpose: if GhostHand crashes, relaunching keeps
+logging on so the fault can still be captured. Each session starts with a header recording the
+version and macOS build, then rotates once at 5 MB to `ghosthand.log.1`. Attach that file to a bug
+report.
+
+For CLI tracing without the UI, add `--verbose` to any command:
+
+```bash
+GhostHand.app/Contents/MacOS/ghosthand ocr --verbose
+```
+
+> **Ad-hoc builds reset permissions.** The local build is ad-hoc signed, so every rebuild changes
+> the code-signing identity macOS keys permissions to. After rebuilding, re-check **Accessibility**
+> and **Screen Recording** in System Settings — the log shows
+> `Failed to create the keyboard event tap` when Accessibility has lapsed.
+
+If Accessibility is missing the global hotkey cannot fire, so use the menu-bar item **Grant
+Accessibility Permission…**. It shows the macOS consent dialog (which registers the app under its
+*current* code identity) and opens the settings pane. GhostHand re-checks the permission every few
+seconds and installs the hotkey as soon as it is granted, so no restart is needed.
+
+> Toggling a **stale** Accessibility entry left over from an earlier ad-hoc build has no effect.
+> Clear it and grant again:
+>
+> ```bash
+> tccutil reset Accessibility com.ghosthand.macos
+> ```
 
 ---
 
@@ -187,6 +234,9 @@ the agent would otherwise act blind — set `GHOSTHAND_ALLOW_NO_AX=1` to overrid
   build's current policy.
 
 Because Laya is local, the state GhostHand sends never leaves the machine at all.
+
+See [`../SECURITY.md`](../SECURITY.md) for the full threat model, the plain-code controls, and the
+residual risks of Jarvis mode.
 
 ---
 

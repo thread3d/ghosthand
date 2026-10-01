@@ -14,7 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         EnvLoader.load()
-        GhostLog.shared.minimumLevel = .info
+        // Restores the persisted "Verbose Logging" menu toggle (info level when it is off).
+        DiagnosticLogging.applyPersistedSetting()
 
         // Single-instance guard (equivalent to the Windows named mutex).
         if !SingleInstance.acquire() {
@@ -138,6 +139,14 @@ final class AppController: NSObject {
         statusBar = StatusBarController(
             onActivate: { [weak self] in self?.activatePrompt() },
             onSetApiKey: { [weak self] in self?.showApiKeySetup() },
+            onGrantAccessibility: {
+                EventTapHotkeyService.requestAccessibilityPermission()
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                    NSWorkspace.shared.open(url)
+                }
+            },
+            onToggleLogging: { enabled in DiagnosticLogging.setEnabled(enabled) },
+            onRevealLog: { DiagnosticLogging.revealInFinder() },
             onQuit: { NSApp.terminate(nil) }
         )
 
@@ -165,11 +174,18 @@ final class AppController: NSObject {
 
     func activatePrompt() {
         if isRunActive {
+            GhostLog.shared.debug("UI: activation during a run — treating as kill switch.")
             killSwitch()
             return
         }
         let target = windowCapture.captureForegroundWindow()
-        GhostLog.shared.info("Trigger received. Target: \(target?.processName ?? "none") (\(target?.windowTitle ?? "none"))")
+        GhostLog.shared.info(
+            "Trigger received. Target: \(target?.processName ?? "none") "
+                + "(\(target?.windowTitle ?? "none"))"
+        )
+        if overlay == nil {
+            GhostLog.shared.error("UI: overlay is nil — the prompt cannot be shown.")
+        }
         overlay?.show(target: target)
     }
 
@@ -181,6 +197,7 @@ final class AppController: NSObject {
     }
 
     func cancelRun() {
+        GhostLog.shared.debug("UI: cancel requested from the prompt.")
         runTask?.cancel()
         setRunActive(false)
         overlay?.hide()
@@ -195,10 +212,12 @@ final class AppController: NSObject {
     // MARK: - Agent run
 
     private func submit(goal: String) {
+        GhostLog.shared.debug("Submit received: '\(goal)'")
         let options = layaOptions()
 
         // Accessibility is required to read the screen and post synthetic input.
         if !AXIsProcessTrusted() {
+            GhostLog.shared.warning("Submit refused: Accessibility permission is not trusted.")
             overlay?.updateStatus(
                 "Accessibility permission is required. Enable GhostHand in System Settings › Privacy & Security › Accessibility.",
                 isError: true)
@@ -210,10 +229,14 @@ final class AppController: NSObject {
 
         let target = overlay?.currentTarget ?? windowCapture.captureForegroundWindow()
         guard let target else {
+            GhostLog.shared.warning("Submit refused: no target window captured.")
             overlay?.updateStatus("No target window captured. Focus an app and try again.", isError: true)
             return
         }
 
+        GhostLog.shared.info(
+            "Run starting: '\(goal)' target=\(target.processName) (\(target.windowTitle))"
+        )
         overlay?.beginRun(goal: goal, target: target)
         setRunActive(true)
 
