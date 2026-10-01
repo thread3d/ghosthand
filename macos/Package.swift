@@ -13,11 +13,17 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "GhostHandCore", targets: ["GhostHandCore"]),
+        .library(name: "GhostHandPlatform", targets: ["GhostHandPlatform"]),
     ],
     targets: [
         .target(
             name: "GhostHandCore",
             path: "Sources/GhostHandCore"
+        ),
+        .target(
+            name: "GhostHandPlatform",
+            dependencies: ["GhostHandCore"],
+            path: "Sources/GhostHandPlatform"
         ),
         .testTarget(
             name: "GhostHandCoreTests",
