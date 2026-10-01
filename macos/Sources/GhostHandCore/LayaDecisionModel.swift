@@ -261,6 +261,47 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
 
     // MARK: Candidate generation
 
+    /// Percent-encodes the two characters that would make a `type:<id>:<text>` choice key
+    /// ambiguous. IDs without `%` or `:` are returned unchanged, so the existing key format
+    /// is preserved for the element IDs the screen reader actually produces.
+    static func encodeElementId(_ id: String) -> String {
+        var encoded = ""
+        for character in id {
+            switch character {
+            case "%": encoded += "%25"
+            case ":": encoded += "%3A"
+            default: encoded.append(character)
+            }
+        }
+        return encoded
+    }
+
+    /// Reverses `encodeElementId` after the choice key has been split.
+    static func decodeElementId(_ id: String) -> String {
+        var decoded = ""
+        let characters = Array(id)
+        var index = 0
+        while index < characters.count {
+            if characters[index] == "%", index + 2 < characters.count {
+                switch String(characters[(index + 1)...(index + 2)]).uppercased() {
+                case "3A":
+                    decoded.append(":")
+                    index += 3
+                    continue
+                case "25":
+                    decoded.append("%")
+                    index += 3
+                    continue
+                default:
+                    break
+                }
+            }
+            decoded.append(characters[index])
+            index += 1
+        }
+        return decoded
+    }
+
     static func buildCandidateChoices(
         goal: String,
         elements: [AccessibilityElement]
@@ -291,6 +332,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
             }
 
             if isTypeable(element.role) && !textCandidates.isEmpty {
+                let encodedId = encodeElementId(element.id)
                 for textCandidate in textCandidates.prefix(3) {
                     // If the element already contains this exact text, avoid looping.
                     if !element.value.isEmpty,
@@ -298,12 +340,12 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
                         continue
                     }
 
-                    let keyEnter = "type_and_enter:\(element.id):\(textCandidate)"
+                    let keyEnter = "type_and_enter:\(encodedId):\(textCandidate)"
                     let descriptionEnter = "Type \"\(textCandidate)\" into \(element.displayRole) "
                         + "\"\(element.displayLabel)\" and press Enter"
                     choices[keyEnter] = descriptionEnter
 
-                    let key = "type:\(element.id):\(textCandidate)"
+                    let key = "type:\(encodedId):\(textCandidate)"
                     let description = "Type \"\(textCandidate)\" into \(element.displayRole) \"\(element.displayLabel)\""
                     choices[key] = description
                 }
@@ -367,7 +409,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
 
         if key.lowercased().hasPrefix("type_and_enter:") {
             let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-            let elementId = parts.count > 1 ? String(parts[1]) : ""
+            let elementId = decodeElementId(parts.count > 1 ? String(parts[1]) : "")
             let text = parts.count > 2 ? String(parts[2]) : ""
             let element = elements.first { $0.id == elementId }
 
@@ -383,7 +425,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
 
         if key.lowercased().hasPrefix("type:") {
             let parts = key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
-            let elementId = parts.count > 1 ? String(parts[1]) : ""
+            let elementId = decodeElementId(parts.count > 1 ? String(parts[1]) : "")
             let text = parts.count > 2 ? String(parts[2]) : ""
             let element = elements.first { $0.id == elementId }
 

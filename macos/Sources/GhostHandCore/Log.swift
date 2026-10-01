@@ -54,12 +54,17 @@ public final class GhostLog: @unchecked Sendable {
         lock.lock()
         FileHandle.standardError.write(Data(lineText.utf8))
         if mirrorToStdout { FileHandle.standardOutput.write(Data(lineText.utf8)) }
-        if let path = filePath, let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(Data(lineText.utf8))
-            try? handle.close()
-        } else if let path = filePath {
-            try? lineText.write(toFile: path, atomically: true, encoding: .utf8)
+        if let path = filePath {
+            // Create the file if it is missing, then always append through a handle so a
+            // failed open can never truncate lines already written.
+            if !FileManager.default.fileExists(atPath: path) {
+                FileManager.default.createFile(atPath: path, contents: nil)
+            }
+            if let handle = FileHandle(forWritingAtPath: path) {
+                handle.seekToEndOfFile()
+                handle.write(Data(lineText.utf8))
+                try? handle.close()
+            }
         }
         lock.unlock()
     }
