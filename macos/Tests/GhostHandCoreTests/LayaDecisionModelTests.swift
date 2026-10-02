@@ -6,6 +6,7 @@ import XCTest
 final class LayaDecisionModelTests: XCTestCase {
     // MARK: - AL08: candidate phrase extraction
 
+    /// Verifies candidate phrase extraction pulls search and write terms from each goal.
     func testAL08_extractCandidatePhrases_extractsSearchAndWriteTerms() {
         let cases: [(goal: String, expected: String)] = [
             ("open brave and search lion", "lion"),
@@ -23,6 +24,7 @@ final class LayaDecisionModelTests: XCTestCase {
         }
     }
 
+    /// Verifies candidate phrase extraction keeps quoted text and arithmetic expressions.
     func testExtractCandidatePhrases_extractsQuotedTextAndCalculations() {
         XCTAssertTrue(LayaDecisionModel.extractCandidatePhrases("write \"Hello World\" into notepad")
             .contains("Hello World"))
@@ -31,6 +33,7 @@ final class LayaDecisionModelTests: XCTestCase {
 
     // MARK: - AL04: app-launch candidates and explicit URLs
 
+    /// Verifies app-launch candidates include the app name and explicit URLs are extracted.
     func testAL04_candidateChoices_includeOpenAppAndOpenUrl() {
         let appCandidates = LayaDecisionModel.extractAppLaunchCandidates("open obsidian")
         XCTAssertTrue(appCandidates.contains { $0.lowercased() == "obsidian" })
@@ -39,6 +42,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertEqual(urlCandidates.first?.host, "news.ycombinator.com")
     }
 
+    /// Verifies app-launch extraction ignores UI stop words and empty goals.
     func testExtractAppLaunchCandidates_ignoresUiStopWords() {
         XCTAssertTrue(LayaDecisionModel.extractAppLaunchCandidates("open menu").isEmpty)
         XCTAssertTrue(LayaDecisionModel.extractAppLaunchCandidates("").isEmpty)
@@ -46,6 +50,7 @@ final class LayaDecisionModelTests: XCTestCase {
 
     // MARK: - EX07: URL validation
 
+    /// Verifies URL validation accepts http and https and rejects unsafe or unknown schemes.
     func testEX07_urlValidator_acceptsHttpAndHttps_rejectsOthers() {
         XCTAssertEqual(UrlLauncherValidator.isValidWebURL("https://news.ycombinator.com")?.host, "news.ycombinator.com")
         XCTAssertEqual(UrlLauncherValidator.isValidWebURL("http://localhost:3000/dashboard")?.scheme, "http")
@@ -56,6 +61,7 @@ final class LayaDecisionModelTests: XCTestCase {
         }
     }
 
+    /// Verifies URL extraction finds each URL and strips trailing punctuation.
     func testEX07_extractWebUrls_extractsAndStripsPunctuation() {
         let prompt = "Please navigate to https://github.com/dushyantzz/Ghosthand and also check http://example.com/api."
         let extracted = UrlLauncherValidator.extractWebURLs(from: prompt)
@@ -66,6 +72,7 @@ final class LayaDecisionModelTests: XCTestCase {
 
     // MARK: - AL06 / AL10 / AL11: synthesized search URLs
 
+    /// Verifies search and site intents synthesize URLs with the expected host and query.
     func testAL06_synthesizesWebSearchesAndSites() {
         let cases: [(goal: String, host: String, queryFragment: String)] = [
             ("search for Adele on youtube", "youtube.com", "Adele"),
@@ -90,12 +97,14 @@ final class LayaDecisionModelTests: XCTestCase {
         }
     }
 
+    /// Verifies a music intent synthesizes a Spotify search URL.
     func testAL10_synthesizesSpotifySearchUrl_forMusicIntent() {
         let urls = UrlLauncherValidator.extractWebURLs(from: "open spotify and play any song of aditya rikhari")
         XCTAssertTrue(urls.contains { ($0.host?.contains("spotify.com") ?? false) && $0.path.contains("search") },
                       "Got URLs: \(urls)")
     }
 
+    /// Verifies a chained platform intent synthesizes the platform search URL.
     func testAL11_synthesizesChainedPlatformSearchUrl() {
         let urls = UrlLauncherValidator.extractWebURLs(
             from: "open brave and search for youtube and search honey singh songs")
@@ -105,6 +114,7 @@ final class LayaDecisionModelTests: XCTestCase {
 
     // MARK: - Candidate choices
 
+    /// Verifies candidate choices include element, standard, and app-launch options.
     func testBuildCandidateChoices_includeElementsStandardsAndAppLaunch() {
         let choices = LayaDecisionModel.buildCandidateChoices(
             goal: "open obsidian",
@@ -116,6 +126,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertNotNil(choices["open_app:obsidian"])
     }
 
+    /// Verifies capping preserves control options and trims element choices to the limit.
     func testCapCandidateChoices_keepsControlsAndCapsElementOptions() {
         var choices: [String: String] = [:]
         for index in 1...50 { choices["click:e\(index)"] = "Click element e\(index)" }
@@ -133,6 +144,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertNotNil(capped["open_app:obsidian"])
     }
 
+    /// Verifies candidate choices pass through unchanged when already under the limit.
     func testCapCandidateChoices_isANoOpUnderTheLimit() {
         let choices = ["click:e1": "Click", "done": "Finished"]
         XCTAssertEqual(LayaDecisionModel.capCandidateChoices(choices, limit: 90), choices)
@@ -140,6 +152,7 @@ final class LayaDecisionModelTests: XCTestCase {
 
     // MARK: - Element IDs containing the key delimiter
 
+    /// Verifies an element id containing a colon survives typing keys through encode and parse.
     func testColonInElementId_roundTripsThroughTypedActionKeys() throws {
         // A `:` in the element id would otherwise be read back as the id/text delimiter,
         // so it must survive encoding in the key and decoding in the parser.
@@ -165,6 +178,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertFalse(entered.textValue?.isEmpty ?? true)
     }
 
+    /// Verifies a plain element id keeps the legacy typing key format.
     func testElementIdWithoutDelimiter_keepsLegacyKeyFormat() {
         let element = AccessibilityElement(id: "e1", role: "Edit", label: "Search")
         let choices = LayaDecisionModel.buildCandidateChoices(
@@ -175,6 +189,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertTrue(choices.keys.contains { $0.hasPrefix("type_and_enter:e1:") })
     }
 
+    /// Verifies element id encoding escapes colons and percent signs and decodes back exactly.
     func testEncodeDecodeElementId_handlesPercentAndColon() {
         XCTAssertEqual(LayaDecisionModel.encodeElementId("e1"), "e1")
         XCTAssertEqual(LayaDecisionModel.encodeElementId("a:b"), "a%3Ab")
@@ -186,6 +201,7 @@ final class LayaDecisionModelTests: XCTestCase {
 
     // MARK: - Decision mapping through a fake Laya client (no network)
 
+    /// Verifies the top action executes even at low confidence with a correctly shaped request.
     func testExecutesTopAction_evenWithLowConfidence() async throws {
         let response = try Self.decode(#"""
         {
@@ -223,6 +239,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertNil(request.model, "empty model should let Laya route")
     }
 
+    /// Verifies a high-confidence goal-achieved noul maps the decision to done.
     func testGoalAchievedNoul_returnsDone() async throws {
         let response = try Self.decode(#"{"answers": {"goalAchieved": {"type":"noul","noul":0.97}}}"#)
         let model = LayaDecisionModel(client: FakeLayaClient(response: response), options: LayaOptions())
@@ -235,6 +252,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertEqual(decision.confidence, 0.97, accuracy: 0.0001)
     }
 
+    /// Verifies an unparseable next action falls back to asking the user.
     func testUnparseableNextAction_asksTheUser() async throws {
         let response = try Self.decode(#"{"answers": {}}"#)
         let model = LayaDecisionModel(client: FakeLayaClient(response: response), options: LayaOptions())
@@ -246,6 +264,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertEqual(decision.operation, .askUser)
     }
 
+    /// Verifies completion verification follows the noul answer in both directions.
     func testVerifyCompletion_usesTheNoulAnswer() async throws {
         let yes = try Self.decode(#"{"answers":{"done":{"type":"noul","noul":0.8}}}"#)
         let no = try Self.decode(#"{"answers":{"done":{"type":"noul","noul":0.2}}}"#)
@@ -260,6 +279,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertFalse(rejected)
     }
 
+    /// Verifies risk scores map to irreversible, reversible, and harmless levels.
     func testRiskMapping_highLevelIsIrreversible_midLevelIsReversible() async throws {
         let target = AppTarget(processId: 1, processName: "Safari")
         let decision = AgentDecision(operation: .click, targetId: "e1")
@@ -287,6 +307,7 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertEqual(lowScore, .harmless)
     }
 
+    /// Verifies control-flow actions are harmless without calling the Laya client.
     func testControlFlowActionsAreHarmlessWithoutACall() async throws {
         let client = FakeLayaClient(response: try Self.decode(#"{"answers":{}}"#))
         let model = LayaDecisionModel(client: client, options: LayaOptions())
@@ -300,19 +321,23 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertTrue(client.requests.isEmpty, "control-flow actions should not call Laya")
     }
 
+    /// Decodes a Laya response from the given JSON string.
     private static func decode(_ json: String) throws -> LayaResponse {
         try JSONDecoder().decode(LayaResponse.self, from: Data(json.utf8))
     }
 }
 
+/// A Laya client stub that records requests and replays a canned response.
 private final class FakeLayaClient: LayaClientProtocol {
     private let response: LayaResponse
     private(set) var requests: [LayaRequest] = []
 
+    /// Creates a fake client that returns the given response for every request.
     init(response: LayaResponse) {
         self.response = response
     }
 
+    /// Records the request and returns the canned response.
     func decide(_ request: LayaRequest) async throws -> LayaResponse {
         requests.append(request)
         return response

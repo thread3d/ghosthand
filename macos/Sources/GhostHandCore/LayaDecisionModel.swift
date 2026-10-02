@@ -9,10 +9,12 @@ import Foundation
 // accessibility elements; Laya only chooses among them. This is the same grounding the
 // Windows build used, re-pointed from the hosted Jev gateway to the offline model.
 
+/// A `DecisionModel` backed by a local Laya server, using deterministic candidate generation.
 public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
     private let client: LayaClientProtocol
     private let options: LayaOptions
 
+    /// Creates a decision model that routes every Laya request through the given client.
     public init(client: LayaClientProtocol, options: LayaOptions) {
         self.client = client
         self.options = options
@@ -25,6 +27,8 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
 
     // MARK: DecisionModel
 
+    /// Asks Laya to select the next action from generated candidates and converts the
+    /// choice into an `AgentDecision`, returning `done` when Laya reports the goal is met.
     public func decideNextAction(
         goal: String,
         target: AppTarget,
@@ -93,6 +97,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         )
     }
 
+    /// Asks Laya whether every requirement of the goal is satisfied and returns its yes/no verdict.
     public func verifyCompletion(
         goal: String,
         target: AppTarget,
@@ -124,6 +129,8 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         return false
     }
 
+    /// Rates the risk of a proposed action through Laya, falling back to a conservative
+    /// category when the model is unreachable.
     public func evaluateActionRisk(
         goal: String,
         target: AppTarget,
@@ -201,6 +208,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
 
     // MARK: Request assembly
 
+    /// Assembles a `LayaRequest` from the state and questions using the configured model options.
     private func makeRequest(state: JSONValue, questions: [String: LayaQuestion]) -> LayaRequest {
         LayaRequest(
             state: state,
@@ -279,6 +287,8 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         return decoded
     }
 
+    /// Builds the deterministic set of candidate action choices offered to Laya for the
+    /// goal and the visible accessibility elements.
     static func buildCandidateChoices(
         goal: String,
         elements: [AccessibilityElement]
@@ -343,6 +353,8 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         return choices
     }
 
+    /// Converts a Laya choice key such as `click:<id>` or `press:enter` into the matching
+    /// `AgentDecision`.
     static func parseActionDecision(
         _ key: String,
         confidence: Double,
@@ -455,6 +467,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         clickableRoles.contains(ElementRanker.canonicalRole(role).lowercased())
     }
 
+    /// Returns whether the canonical form of the role accepts typed text.
     static func isTypeable(_ role: String) -> Bool {
         typeableRoles.contains(ElementRanker.canonicalRole(role).lowercased())
     }
@@ -467,6 +480,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         var candidates: [String] = []
         var seen = Set<String>()
 
+        /// Appends a candidate unless an equivalent value was already recorded.
         func add(_ value: String) {
             let key = value.lowercased()
             if seen.insert(key).inserted {
@@ -561,6 +575,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         String(format: "%.0f%%", value * 100)
     }
 
+    /// Serializes one accessibility element into the compact JSON object sent to Laya.
     private static func elementJSON(_ element: AccessibilityElement) -> JSONValue {
         .object([
             "id": .string(element.id),
@@ -574,6 +589,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
 
     // MARK: Regex plumbing
 
+    /// Compiles a regex from a compile-time constant pattern, treating a failure as a programmer error.
     private static func regex(_ pattern: String, caseInsensitive: Bool = false) -> NSRegularExpression {
         // Patterns are compile-time constants; a failure here is a programmer error.
         try! NSRegularExpression(
@@ -618,6 +634,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         caseInsensitive: true
     )
 
+    /// Returns the first match of the regex in the text, or nil when nothing matches.
     private static func firstMatch(
         _ regex: NSRegularExpression,
         in text: String
@@ -625,6 +642,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..<text.endIndex, in: text))
     }
 
+    /// Returns every match of the regex in the text, in order of appearance.
     private static func allMatches(
         _ regex: NSRegularExpression,
         in text: String
@@ -632,6 +650,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         regex.matches(in: text, options: [], range: NSRange(text.startIndex..<text.endIndex, in: text))
     }
 
+    /// Returns the text captured by the given group index, or nil when the group is absent.
     private static func group(
         _ index: Int,
         of match: NSTextCheckingResult,
@@ -645,6 +664,7 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
         return String(text[swiftRange])
     }
 
+    /// Returns the text with every regex match replaced by the given template.
     private static func replace(
         _ regex: NSRegularExpression,
         in text: String,

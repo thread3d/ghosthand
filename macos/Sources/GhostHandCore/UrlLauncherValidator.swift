@@ -6,6 +6,7 @@ import Foundation
 // (rejecting embedded user-info) and extracts launchable URLs from a natural
 // language prompt, including search-engine and music-streaming intents.
 
+/// Validates web URLs and extracts launchable URLs from natural-language prompts.
 public enum UrlLauncherValidator {
 
     // MARK: Validation
@@ -39,6 +40,7 @@ public enum UrlLauncherValidator {
 
     // MARK: Extraction
 
+    /// Extracts launchable http/https URLs from a prompt, or an empty array when none are found.
     public static func extractWebURLs(from prompt: String) -> [URL] {
         guard !prompt.isBlank else { return [] }
 
@@ -183,12 +185,14 @@ public enum UrlLauncherValidator {
         }
     }
 
+    /// Returns `value` with surrounding single or double quotes removed.
     private static func trimQuotes(_ value: String) -> String {
         value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
     }
 
     // MARK: Regex plumbing
 
+    /// Compiles a case-insensitive regular expression for `pattern`.
     private static func regex(_ pattern: String) -> NSRegularExpression {
         try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }
@@ -227,6 +231,7 @@ public enum UrlLauncherValidator {
         #"(?:(?:open|launch|start)\s+[a-zA-Z0-9_\- ]+?\s+(?:and|then)\s+)?(?:search|look\s+up|find|query)(?:\s+(?:for|about|on|regarding|the\s+web\s+for))?\s+(.+?)(?:\s+(?:on|in|using|with)\s+([a-zA-Z0-9\-_]+)|\.|$)"#
     )
 
+    /// Returns the first match of `regex` in `text`, or nil when there is none.
     private static func firstMatch(
         _ regex: NSRegularExpression,
         in text: String
@@ -234,6 +239,7 @@ public enum UrlLauncherValidator {
         regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..<text.endIndex, in: text))
     }
 
+    /// Returns every match of `regex` in `text`.
     private static func allMatches(
         _ regex: NSRegularExpression,
         in text: String
@@ -241,6 +247,7 @@ public enum UrlLauncherValidator {
         regex.matches(in: text, options: [], range: NSRange(text.startIndex..<text.endIndex, in: text))
     }
 
+    /// Returns the captured substring at `index`, or nil when that group did not match.
     private static func group(
         _ index: Int,
         of match: NSTextCheckingResult,
@@ -254,6 +261,7 @@ public enum UrlLauncherValidator {
         return String(text[swiftRange])
     }
 
+    /// Returns `text` with every match of `regex` replaced by `template`.
     private static func replace(
         _ regex: NSRegularExpression,
         in text: String,

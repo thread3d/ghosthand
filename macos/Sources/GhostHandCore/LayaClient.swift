@@ -6,7 +6,9 @@ import Foundation
 // speaks the Jev-compatible wire protocol, so this mirrors the Windows Jev client's
 // retry/error behaviour, re-pointed at loopback.
 
+/// Client abstraction used by `LayaDecisionModel` so callers and tests can substitute a fake.
 public protocol LayaClientProtocol: AnyObject {
+    /// Sends the request to the Laya server and returns its decoded response.
     func decide(_ request: LayaRequest) async throws -> LayaResponse
 }
 
@@ -14,6 +16,7 @@ public final class LayaClient: LayaClientProtocol, @unchecked Sendable {
     private let options: LayaOptions
     private let session: URLSession
 
+    /// Creates a client for the configured Laya server, reusing the given URL session.
     public init(options: LayaOptions, session: URLSession = .shared) {
         self.options = options
         self.session = session
@@ -21,6 +24,7 @@ public final class LayaClient: LayaClientProtocol, @unchecked Sendable {
 
     // MARK: Decide
 
+    /// Encodes the request, POSTs it to `/v1/systemone`, and decodes the response.
     public func decide(_ request: LayaRequest) async throws -> LayaResponse {
         guard let url = endpointURL(path: "/v1/systemone") else {
             throw LayaError.proto("Invalid Laya base URL '\(options.baseUrl)'")
@@ -65,12 +69,14 @@ public final class LayaClient: LayaClientProtocol, @unchecked Sendable {
 
     // MARK: Transport
 
+    /// Builds the absolute endpoint URL by appending the path to the configured base URL.
     private func endpointURL(path: String) -> URL? {
         let base = options.baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !base.isBlank else { return nil }
         return URL(string: base + path)
     }
 
+    /// Performs a request with retry and backoff, mapping transport and HTTP failures to `LayaError`.
     private func send(url: URL, method: String, body: Data?, timeout: Int) async throws -> Data {
         var attempt = 0
         while true {
@@ -132,12 +138,14 @@ public final class LayaClient: LayaClientProtocol, @unchecked Sendable {
         }
     }
 
+    /// Sleeps for an exponentially increasing delay with jitter before the next retry.
     private func backoff(_ attempt: Int) async throws {
         let baseMs = Int(pow(2.0, Double(attempt - 1)) * 500)
         let jitter = Int.random(in: 0..<250)
         try await Task.sleep(nanoseconds: UInt64(baseMs + jitter) * 1_000_000)
     }
 
+    /// Extracts the server's `detail` error text, falling back to a short body snippet.
     private static func detail(from data: Data) -> String {
         guard !data.isEmpty else { return "" }
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

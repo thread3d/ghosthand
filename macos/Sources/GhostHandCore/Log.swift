@@ -6,6 +6,7 @@ import Foundation
 // configured, appends to a log file. Kept dependency-free so GhostHandCore stays
 // platform-independent (the Windows build used Microsoft.Extensions.Logging/Serilog).
 
+/// Severity levels ordered from most verbose (`trace`) through most severe (`error`).
 public enum GhostLogLevel: Int, Comparable, Sendable {
     case trace = 0
     case debug = 1
@@ -13,6 +14,7 @@ public enum GhostLogLevel: Int, Comparable, Sendable {
     case warning = 3
     case error = 4
 
+    /// Orders levels by ascending severity so comparisons such as `level >= minimumLevel` work.
     public static func < (lhs: GhostLogLevel, rhs: GhostLogLevel) -> Bool {
         lhs.rawValue < rhs.rawValue
     }
@@ -28,6 +30,7 @@ public enum GhostLogLevel: Int, Comparable, Sendable {
     }
 }
 
+/// A leveled logger that writes to stderr and optionally mirrors to stdout or a log file.
 public final class GhostLog: @unchecked Sendable {
     public static let shared = GhostLog()
 
@@ -39,12 +42,14 @@ public final class GhostLog: @unchecked Sendable {
     private let lock = NSLock()
     private let formatter: DateFormatter
 
+    /// Creates a logger with its own timestamp formatter; most callers should use `GhostLog.shared`.
     public init() {
         formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         formatter.locale = Locale(identifier: "en_US_POSIX")
     }
 
+    /// Writes one leveled message to stderr and, when configured, to stdout and the log file.
     public func log(_ level: GhostLogLevel, _ message: String, file: String = #fileID, line: Int = #line) {
         guard level >= minimumLevel else { return }
         let timestamp = formatter.string(from: Date())
@@ -69,11 +74,17 @@ public final class GhostLog: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Logs a message at trace level.
     public func trace(_ message: String, file: String = #fileID, line: Int = #line) { log(.trace, message, file: file, line: line) }
+    /// Logs a message at debug level.
     public func debug(_ message: String, file: String = #fileID, line: Int = #line) { log(.debug, message, file: file, line: line) }
+    /// Logs a message at info level.
     public func info(_ message: String, file: String = #fileID, line: Int = #line) { log(.info, message, file: file, line: line) }
+    /// Logs a message at warning level.
     public func warning(_ message: String, file: String = #fileID, line: Int = #line) { log(.warning, message, file: file, line: line) }
+    /// Logs a message at error level.
     public func error(_ message: String, file: String = #fileID, line: Int = #line) { log(.error, message, file: file, line: line) }
 }
 
+/// Logs an informational message through the process-wide shared logger.
 public func ghostLogInfo(_ message: String) { GhostLog.shared.info(message) }

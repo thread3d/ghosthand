@@ -5,11 +5,13 @@ import XCTest
 /// File-backed logging: the first write must create the file and later writes must
 /// append, never replace, so earlier log lines are preserved.
 final class LogTests: XCTestCase {
+    /// Returns a unique temporary file path for a single log test.
     private func temporaryPath() -> String {
         (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("ghosthand-log-\(UUID().uuidString).txt")
     }
 
+    /// Verifies that the first log write creates the log file when it does not yet exist.
     func testFileLogging_createsTheFileWhenMissing() {
         let log = GhostLog()
         let path = temporaryPath()
@@ -22,6 +24,7 @@ final class LogTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: path))
     }
 
+    /// Verifies that later log writes append to the file and preserve earlier lines.
     func testFileLogging_appendsRatherThanReplacing() throws {
         let log = GhostLog()
         let path = temporaryPath()

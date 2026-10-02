@@ -6,6 +6,7 @@ import Foundation
 // evaluate request and for the "answers" bag of an evaluate response.
 // Shared by the Laya request/response types.
 
+/// A dynamic JSON value preserving null, boolean, number, string, array, and object shapes.
 public enum JSONValue: Codable, Equatable, Sendable {
     case null
     case bool(Bool)
@@ -16,6 +17,7 @@ public enum JSONValue: Codable, Equatable, Sendable {
 
     // MARK: Codable
 
+    /// Decodes any supported JSON value by probing bool, number, string, array, and object in order.
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
@@ -50,6 +52,7 @@ public enum JSONValue: Codable, Equatable, Sendable {
         )
     }
 
+    /// Encodes the wrapped value into a single-value container using its natural JSON form.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
@@ -110,6 +113,7 @@ public enum JSONValue: Codable, Equatable, Sendable {
         return nil
     }
 
+    /// Returns the value stored under `key`, or `nil` when this value is not an object or lacks the key.
     public func value(forKey key: String) -> JSONValue? {
         objectValue?[key]
     }
@@ -134,26 +138,32 @@ public enum JSONValue: Codable, Equatable, Sendable {
 // `let state: JSONValue = ["task": "open notepad", "step": 1]`.
 
 extension JSONValue: ExpressibleByStringLiteral {
+    /// Creates a string value from a Swift string literal.
     public init(stringLiteral value: String) { self = .string(value) }
 }
 
 extension JSONValue: ExpressibleByIntegerLiteral {
+    /// Creates a number value from a Swift integer literal.
     public init(integerLiteral value: Int) { self = .number(Double(value)) }
 }
 
 extension JSONValue: ExpressibleByFloatLiteral {
+    /// Creates a number value from a Swift floating-point literal.
     public init(floatLiteral value: Double) { self = .number(value) }
 }
 
 extension JSONValue: ExpressibleByBooleanLiteral {
+    /// Creates a boolean value from a Swift boolean literal.
     public init(booleanLiteral value: Bool) { self = .bool(value) }
 }
 
 extension JSONValue: ExpressibleByArrayLiteral {
+    /// Creates an array value from a Swift array literal.
     public init(arrayLiteral elements: JSONValue...) { self = .array(elements) }
 }
 
 extension JSONValue: ExpressibleByDictionaryLiteral {
+    /// Creates an object value from a Swift dictionary literal.
     public init(dictionaryLiteral elements: (String, JSONValue)...) {
         var object: [String: JSONValue] = [:]
         for (key, value) in elements { object[key] = value }

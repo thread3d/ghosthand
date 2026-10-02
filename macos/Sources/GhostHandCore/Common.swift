@@ -6,8 +6,13 @@ import Foundation
 // `.env` file (walking up to four parent directories) without overwriting variables
 // already present in the process environment.
 
+/// Loads environment variables from a `.env` file found near the executable or working directory.
 public enum EnvLoader {
     @discardableResult
+    /// Loads `KEY=VALUE` pairs from the nearest `.env` file into the process environment.
+    ///
+    /// Variables already present in the environment are left untouched. Returns the path of
+    /// the file that was loaded, or `nil` when no readable `.env` file is found.
     public static func load(directoryPath: String? = nil) -> String? {
         var searchDirs: [String] = []
         if let directoryPath, !directoryPath.isEmpty {
@@ -61,9 +66,12 @@ public enum EnvLoader {
 
 // MARK: - Clock
 
+/// A `Clock` implementation backed by the system date and `Task.sleep`.
 public final class SystemClock: Clock {
+    /// Creates a clock that reads `Date()` and sleeps using `Task.sleep`.
     public init() {}
     public var utcNow: Date { Date() }
+    /// Suspends the current task for the given duration, treating negative values as zero.
     public func delay(_ duration: TimeInterval) async throws {
         try await Task.sleep(nanoseconds: UInt64(max(0, duration) * 1_000_000_000))
     }

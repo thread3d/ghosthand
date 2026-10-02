@@ -5,6 +5,7 @@ import XCTest
 final class LayaDTOTests: XCTestCase {
     // MARK: - Request encoding
 
+    /// Verifies a Laya request encodes the expected schema keys and snake_case controls.
     func testRequestEncodesLayaSchema() throws {
         let request = LayaRequest(
             state: ["goal": "search for Adele", "app": "Safari"],
@@ -37,6 +38,7 @@ final class LayaDTOTests: XCTestCase {
         XCTAssertTrue(json.contains("\"type\":\"score\""), json)
     }
 
+    /// Verifies a noul question encodes its type and instructions without criteria.
     func testNoulQuestionHasNoCriteria() throws {
         let data = try JSONEncoder().encode(LayaQuestion.noul("Is it done?"))
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -45,6 +47,7 @@ final class LayaDTOTests: XCTestCase {
         XCTAssertNil(object?["criteria"])
     }
 
+    /// Verifies choice criteria encode as an object and score criteria as an array.
     func testChoiceCriteriaIsAnObject_andScoreCriteriaIsAnArray() throws {
         let choice = try JSONSerialization.jsonObject(
             with: JSONEncoder().encode(LayaQuestion.choice(["a": "Option A"]))) as? [String: Any]
@@ -83,6 +86,7 @@ final class LayaDTOTests: XCTestCase {
     }
     """
 
+    /// Verifies noul, choice, and score answers decode with probabilities and confidences.
     func testNoulChoiceAndScoreAnswersParse() throws {
         let response = try JSONDecoder().decode(LayaResponse.self, from: Data(responseJSON.utf8))
 
@@ -103,6 +107,7 @@ final class LayaDTOTests: XCTestCase {
         XCTAssertEqual(score?.legend[2], "irreversible or external effect")
     }
 
+    /// Verifies the JEV-compatible boolean accessor maps a noul answer to value and probability.
     func testJevCompatibleBooleanAccessorMapsOntoNoul() throws {
         let response = try JSONDecoder().decode(LayaResponse.self, from: Data(responseJSON.utf8))
         let boolean = response.tryGetBooleanAnswer("goalAchieved")
@@ -110,12 +115,14 @@ final class LayaDTOTests: XCTestCase {
         XCTAssertEqual(boolean?.probability ?? 0, 0.88, accuracy: 0.0001)
     }
 
+    /// Verifies a noul probability below one half is reported as false.
     func testNoulIsFalseBelowHalf() throws {
         let response = try JSONDecoder().decode(
             LayaResponse.self, from: Data(#"{"answers":{"done":{"noul":0.49}}}"#.utf8))
         XCTAssertEqual(response.tryGetNoul("done")?.isTrue, false)
     }
 
+    /// Verifies lookups for absent answer keys return nil for every answer kind.
     func testMissingAnswersReturnNil() throws {
         let response = try JSONDecoder().decode(LayaResponse.self, from: Data(#"{"answers":{}}"#.utf8))
         XCTAssertNil(response.tryGetNoul("missing"))
@@ -123,12 +130,14 @@ final class LayaDTOTests: XCTestCase {
         XCTAssertNil(response.tryGetScore("missing"))
     }
 
+    /// Verifies a choice answer without a choice string yields nil.
     func testChoiceWithoutAChoiceStringReturnsNil() throws {
         let response = try JSONDecoder().decode(
             LayaResponse.self, from: Data(#"{"answers":{"next":{"probabilities":{"a":0.9}}}}"#.utf8))
         XCTAssertNil(response.tryGetChoice("next"))
     }
 
+    /// Verifies a numeric string score decodes and its probabilities are retained.
     func testScoreAcceptsNumericStringAndFallsBackToConfidence() throws {
         let response = try JSONDecoder().decode(
             LayaResponse.self, from: Data(#"{"answers":{"risk":{"score":"2","probabilities":{"0":0.1,"1":0.2,"2":0.7}}}}"#.utf8))
@@ -136,6 +145,7 @@ final class LayaDTOTests: XCTestCase {
         XCTAssertEqual(response.tryGetScore("risk")?.probabilities.count, 3)
     }
 
+    /// Verifies usage counters and routing metadata decode from the response.
     func testRoutingAndUsageDecode() throws {
         let response = try JSONDecoder().decode(LayaResponse.self, from: Data(responseJSON.utf8))
         XCTAssertEqual(response.usage?.inputTokens, 120)
@@ -143,6 +153,7 @@ final class LayaDTOTests: XCTestCase {
         XCTAssertEqual(response.routing?.value(forKey: "model")?.stringValue, "english")
     }
 
+    /// Verifies the health payload decodes its status, device, and loaded models.
     func testHealthDecodes() throws {
         let health = try JSONDecoder().decode(
             LayaHealth.self,
@@ -154,6 +165,7 @@ final class LayaDTOTests: XCTestCase {
 
     // MARK: - JSONValue
 
+    /// Verifies JSONValue accessors expose string, double, int, bool, and null values.
     func testJSONValueAccessors() {
         XCTAssertEqual(JSONValue.string("x").stringValue, "x")
         XCTAssertEqual(JSONValue.number(2.5).doubleValue, 2.5)
@@ -167,6 +179,7 @@ final class LayaDTOTests: XCTestCase {
         XCTAssertEqual(object.value(caseInsensitive: "A")?.intValue, 1)
     }
 
+    /// Verifies a nested JSONValue survives an encode and decode round trip.
     func testJSONValueRoundTrips() throws {
         let value: JSONValue = ["nested": ["list": [1, 2, 3], "flag": false]]
         let decoded = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))

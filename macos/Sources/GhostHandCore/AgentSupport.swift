@@ -6,6 +6,7 @@ import Foundation
 // Port of GhostHand.Core.Agent.LoopGuard. Detects an unchanging screen state so the
 // agent cannot spin forever on a page that never updates.
 
+/// Tracks consecutive identical screen observations so the agent stops spinning on a static page.
 public final class LoopGuard {
     private let maxConsecutiveStalls: Int
     private var lastStateSignature: String?
@@ -14,6 +15,7 @@ public final class LoopGuard {
     public var consecutiveStalls: Int { _consecutiveStalls }
     public var isStalled: Bool { _consecutiveStalls >= maxConsecutiveStalls }
 
+    /// Creates a guard that trips after the given number of identical consecutive observations.
     public init(maxConsecutiveStalls: Int = 10) {
         self.maxConsecutiveStalls = maxConsecutiveStalls
     }
@@ -31,11 +33,13 @@ public final class LoopGuard {
         return isStalled
     }
 
+    /// Clears the recorded screen signature and resets the consecutive-stall count to zero.
     public func reset() {
         lastStateSignature = nil
         _consecutiveStalls = 0
     }
 
+    /// Builds a SHA-256 signature over each element's identity, role, label, value, and state.
     private static func computeSignature(_ elements: [AccessibilityElement]) -> String {
         var builder = ""
         for element in elements {
@@ -59,6 +63,7 @@ public final class LoopGuard {
 
 // MARK: - AgentLoopOptions
 
+/// Tunable limits for an agent run, including the step cap and dry-run mode.
 public struct AgentLoopOptions: Sendable {
     /// 0 = unlimited: runs until the task completes or is cancelled.
     public var maxSteps: Int = 0
@@ -66,8 +71,10 @@ public struct AgentLoopOptions: Sendable {
     public var maxConsecutiveStalls: Int = 15
     public var actionTimeoutSeconds: Int = 10
 
+    /// Creates options with an unlimited step count and dry-run enabled.
     public init() {}
 
+    /// Reads `DRY_RUN` and `MAX_STEPS_PER_RUN` from the environment, falling back to defaults.
     public static func fromEnvironment() -> AgentLoopOptions {
         var options = AgentLoopOptions()
         let env = ProcessInfo.processInfo.environment

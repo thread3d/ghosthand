@@ -8,6 +8,7 @@ import Foundation
 //
 // Nothing here talks to the network by default: the default base URL is loopback.
 
+/// Configuration for the local Laya decision model, reachable over its HTTP protocol.
 public final class LayaOptions: @unchecked Sendable {
     /// Loopback address of the local Laya server.
     public var baseUrl: String = "http://127.0.0.1:8000"
@@ -42,8 +43,10 @@ public final class LayaOptions: @unchecked Sendable {
     /// Extra seconds to wait for the server to become healthy while checkpoints load.
     public var startupTimeoutSeconds: Int = 240
 
+    /// Creates Laya options populated with the built-in defaults.
     public init() {}
 
+    /// Builds options from `LAYA_*` environment variables, falling back to the defaults.
     public static func fromEnvironment() -> LayaOptions {
         let options = LayaOptions()
         let env = ProcessInfo.processInfo.environment
@@ -77,6 +80,7 @@ public final class LayaOptions: @unchecked Sendable {
 //
 // Error strings are sanitized so a bearer token can never leak through a message.
 
+/// Error raised by the Laya client, with messages sanitized against token leakage.
 public enum LayaError: Error, LocalizedError, CustomStringConvertible {
     case auth(String, statusCode: Int)
     case transient(String, statusCode: Int)
@@ -106,6 +110,7 @@ public enum LayaError: Error, LocalizedError, CustomStringConvertible {
         }
     }
 
+    /// Returns `message` with bearer tokens and Laya/API keys redacted.
     static func sanitize(_ message: String) -> String {
         guard !message.isEmpty else { return message }
         var result = message

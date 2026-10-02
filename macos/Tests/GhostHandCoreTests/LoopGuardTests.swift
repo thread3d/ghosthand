@@ -5,12 +5,14 @@ import XCTest
 /// Port of `GhostHand.Tests.Agent.AgentLoopTests` EX05's underlying loopGuard behavior plus
 /// focused tests for the Swift `LoopGuard` surface.
 final class LoopGuardTests: XCTestCase {
+    /// Returns a single-element accessibility snapshot with the given identifier and label.
     private func elements(_ id: String, label: String = "Search Button") -> [AccessibilityElement] {
         [AccessibilityElement(
             id: id, role: "Button", label: label, enabled: true,
             frame: CGRect(x: 0, y: 0, width: 100, height: 30))]
     }
 
+    /// Verifies that identical observations increment the stall count and trip exactly at the threshold.
     func testIdenticalObservationsIncrementStalls_AndTripAtThreshold() {
         let loopGuard = LoopGuard(maxConsecutiveStalls: 3)
 
@@ -27,6 +29,7 @@ final class LoopGuardTests: XCTestCase {
         XCTAssertTrue(loopGuard.isStalled)
     }
 
+    /// Verifies that a changed screen signature resets the consecutive stall count to one.
     func testChangedObservationResetsTheStallCount() {
         let loopGuard = LoopGuard(maxConsecutiveStalls: 3)
 
@@ -40,6 +43,7 @@ final class LoopGuardTests: XCTestCase {
         XCTAssertFalse(loopGuard.isStalled)
     }
 
+    /// Verifies that reset clears the stall count and the stalled flag, starting a fresh sequence.
     func testResetClearsState() {
         let loopGuard = LoopGuard(maxConsecutiveStalls: 2)
 
@@ -56,12 +60,14 @@ final class LoopGuardTests: XCTestCase {
         XCTAssertEqual(loopGuard.consecutiveStalls, 1)
     }
 
+    /// Verifies that the stall threshold is configurable and can trip on the first observation.
     func testThresholdIsConfigurable() {
         let immediate = LoopGuard(maxConsecutiveStalls: 1)
         XCTAssertTrue(immediate.recordObservation(elements("e1")))
         XCTAssertTrue(immediate.isStalled)
     }
 
+    /// Verifies that label changes reset the signature while frame-only changes do not.
     func testChangedLabelsResetButFrameOnlyChangesDoNot() {
         // The signature is built from id/role/label/value/focused/enabled — a frame-only
         // change is still the same observed state.

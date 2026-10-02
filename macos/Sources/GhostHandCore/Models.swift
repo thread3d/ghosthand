@@ -6,6 +6,7 @@ import Foundation
 // Swift port of GhostHand.Core.Models.AgentOperation.
 // Raw values are kept in the original C# PascalCase so audit-log JSON stays wire-compatible.
 
+/// Operations an agent can request, with raw values kept wire-compatible with the C# original.
 public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     case click = "Click"
     case typeText = "TypeText"
@@ -33,6 +34,7 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
 // Platform-independent representation of a readable UI control or OCR detection.
 // Mirrors GhostHand.Core.Models.AccessibilityElement.
 
+/// A platform-independent view of a readable UI control or OCR detection.
 public struct AccessibilityElement: Identifiable, Equatable, Sendable {
     public var id: String
     public var role: String
@@ -45,6 +47,7 @@ public struct AccessibilityElement: Identifiable, Equatable, Sendable {
     public var source: String
     public var actions: [String]
 
+    /// Creates an accessibility element from its identity, role, and optional attributes.
     public init(
         id: String,
         role: String,
@@ -86,6 +89,7 @@ public struct AccessibilityElement: Identifiable, Equatable, Sendable {
         }
     }
 
+    /// Returns a short display string, truncating the label or role to `maxChars` characters.
     public func compactDescription(maxChars: Int = 160) -> String {
         let text = !displayLabel.isEmpty ? displayLabel : displayRole
         if text.count > maxChars {
@@ -99,6 +103,7 @@ public struct AccessibilityElement: Identifiable, Equatable, Sendable {
 //
 // Information about the target application and its active window.
 
+/// Describes the target application process and its active window.
 public struct AppTarget: Equatable, Sendable {
     public var processId: Int32
     public var processName: String
@@ -110,6 +115,7 @@ public struct AppTarget: Equatable, Sendable {
     public var isElevated: Bool
     public var bundleIdentifier: String?
 
+    /// Creates a target description for an application process and its active window.
     public init(
         processId: Int32,
         processName: String,
@@ -135,6 +141,7 @@ public struct AppTarget: Equatable, Sendable {
 
 // MARK: - AgentDecision
 
+/// A single operation chosen by the agent, with optional target, text, and coordinates.
 public struct AgentDecision: Equatable, Sendable {
     public var operation: AgentOperation
     public var targetId: String?
@@ -146,6 +153,7 @@ public struct AgentDecision: Equatable, Sendable {
     public var confidence: Double
     public var requiresConfirmation: Bool
 
+    /// Creates an agent decision for the given operation with optional targeting and confidence details.
     public init(
         operation: AgentOperation,
         targetId: String? = nil,
@@ -171,6 +179,7 @@ public struct AgentDecision: Equatable, Sendable {
 
 // MARK: - ActionResult
 
+/// The outcome of executing an agent operation, including error text and any new target.
 public struct ActionResult: Sendable {
     public var success: Bool
     public var errorMessage: String?
@@ -180,6 +189,7 @@ public struct ActionResult: Sendable {
 
     public var error: String? { errorMessage }
 
+    /// Creates a result with the given outcome, optional messages, duration, and follow-up target.
     public init(
         success: Bool,
         errorMessage: String? = nil,
@@ -194,22 +204,27 @@ public struct ActionResult: Sendable {
         self.newTarget = newTarget
     }
 
+    /// Returns a successful result carrying only the given duration.
     public static func succeeded(duration: TimeInterval = 0) -> ActionResult {
         ActionResult(success: true, duration: duration)
     }
 
+    /// Returns a failed result carrying the supplied error message and duration.
     public static func failed(_ error: String, duration: TimeInterval = 0) -> ActionResult {
         ActionResult(success: false, errorMessage: error, duration: duration)
     }
 
+    /// Returns a successful result with an optional informational message.
     public static func successResult(_ message: String? = nil) -> ActionResult {
         ActionResult(success: true, message: message)
     }
 
+    /// Returns a failed result carrying the supplied error message.
     public static func failureResult(_ error: String) -> ActionResult {
         ActionResult(success: false, errorMessage: error)
     }
 
+    /// Returns a successful result that reports the new active target after a transition.
     public static func targetChanged(_ target: AppTarget, _ message: String? = nil) -> ActionResult {
         ActionResult(success: true, message: message, newTarget: target)
     }
