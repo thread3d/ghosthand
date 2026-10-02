@@ -20,6 +20,7 @@ final class RiskPolicyTests: XCTestCase {
 
     // MARK: - RS01: Jarvis mode never asks for confirmation on safe labels
 
+    /// Verifies that safe action labels never require confirmation in Jarvis mode.
     func testRS01_AllSafeActions_NeverRequireConfirmation() {
         let labels = [
             "Submit", "Submit Application", "Apply Now", "Send Email", "Pay $50",
@@ -41,6 +42,7 @@ final class RiskPolicyTests: XCTestCase {
 
     // MARK: - RS02: model risk escalation never blocks in Jarvis mode
 
+    /// Verifies that a model-supplied risk escalation does not block execution in Jarvis mode.
     func testRS02_ModelRisk_DoesNotBlockExecution_InJarvisMode() {
         let escalated = AgentDecision(
             operation: .click,
@@ -54,9 +56,10 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertNil(policy.requiresConfirmation(decision: escalated, target: element, appTarget: sampleApp))
     }
 
-    // MARK: - RS05: password fields still need no confirmation
+    // MARK: - RS05: clicking a credential field is not itself a write
 
-    func testRS05_PasswordField_NoConfirmationRequired_JarvisMode() {
+    /// Verifies that clicking a password field is not treated as a credential write.
+    func testRS05_PasswordFieldClick_NeedsNoConfirmation() {
         let decision = AgentDecision(operation: .click, targetId: "pw1", targetLabel: "Password")
         let element = AccessibilityElement(
             id: "pw1", role: "PasswordBox", label: "Password", value: "[PASSWORD]", enabled: true)
@@ -64,18 +67,63 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertNil(policy.requiresConfirmation(decision: decision, target: element, appTarget: sampleApp))
     }
 
-    // MARK: - RS06: sensitive typed text still needs no confirmation
+    // MARK: - RS14: writing credentials requires confirmation by default
 
-    func testRS06_SensitiveTypedText_NoConfirmation_JarvisMode() {
+    /// Verifies that typed credential text requires confirmation with an explanatory reason.
+    func testRS14_TypedPasswordText_RequiresConfirmation() {
         let decision = AgentDecision(
             operation: .typeText, targetId: "e1", targetLabel: "Search Box",
-            textValue: "submit login transfer")
+            textValue: "my password is hunter2")
+
+        let reason = policy.requiresConfirmation(decision: decision, target: nil, appTarget: sampleApp)
+        XCTAssertNotNil(reason, "credential text must require confirmation")
+        XCTAssertTrue(reason?.lowercased().contains("confirmation required") ?? false, "Reason was: \(reason ?? "")")
+    }
+
+    /// Verifies that credential text typed with type-and-enter also requires confirmation.
+    func testRS14_TypedCredentialTextOnTypeAndEnter_RequiresConfirmation() {
+        let decision = AgentDecision(
+            operation: .typeAndEnter, targetId: "e1", targetLabel: "Search Box",
+            textValue: "set the api key to sk-live-123")
+
+        XCTAssertNotNil(policy.requiresConfirmation(decision: decision, target: nil, appTarget: sampleApp))
+    }
+
+    /// Verifies that writing any text into a secure password field requires confirmation.
+    func testRS14_WritingIntoAPasswordField_RequiresConfirmation() {
+        let decision = AgentDecision(operation: .typeText, targetId: "pw1", textValue: "hunter2")
+        let element = AccessibilityElement(
+            id: "pw1", role: "AXSecureTextField", label: "Password", enabled: true)
+
+        XCTAssertNotNil(policy.requiresConfirmation(decision: decision, target: element, appTarget: sampleApp))
+    }
+
+    /// Verifies that benign typed text needs no confirmation.
+    func testRS14_BenignTypedText_NeedsNoConfirmation() {
+        let decision = AgentDecision(
+            operation: .typeText, targetId: "e1", targetLabel: "Search Box",
+            textValue: "search for Adele")
 
         XCTAssertNil(policy.requiresConfirmation(decision: decision, target: nil, appTarget: sampleApp))
     }
 
+    /// Verifies that sensitive-text confirmation can be disabled while deletion stays prohibited.
+    func testRS14_SensitiveConfirmationCanBeDisabledForJarvisMode() {
+        let options = RiskPolicyOptions()
+        options.requireConfirmationOnSensitiveText = false
+        let jarvis = DefaultRiskPolicy(options: options)
+
+        let credential = AgentDecision(operation: .typeText, targetId: "e1", textValue: "my password")
+        XCTAssertNil(jarvis.requiresConfirmation(decision: credential, target: nil, appTarget: sampleApp))
+
+        // The prohibition on deletion is NOT configurable and must still hold.
+        let deletion = AgentDecision(operation: .typeText, targetId: "e1", textValue: "delete the file")
+        XCTAssertNotNil(jarvis.isActionProhibited(decision: deletion, target: nil, goal: "organize"))
+    }
+
     // MARK: - RS08: ordinary apps are allowed
 
+    /// Verifies that ordinary apps are allowed and password managers are not.
     func testRS08_AllApps_AreAllowed_ExceptPasswordManagers() {
         let apps = [
             ("chrome", "Submit Application Form"),
@@ -92,6 +140,7 @@ final class RiskPolicyTests: XCTestCase {
 
     // MARK: - RS09: password managers are refused
 
+    /// Verifies that deny-listed apps are refused by their process name.
     func testRS09_DenyListedApps_AreRefusedByProcessName() {
         let apps = [
             ("1password", "1Password"),
@@ -110,6 +159,7 @@ final class RiskPolicyTests: XCTestCase {
         }
     }
 
+    /// Verifies that deny-listed apps are refused by their bundle identifier.
     func testRS09_DenyListedApps_AreRefusedByBundleIdentifier() {
         let app = AppTarget(
             processId: 9999,
@@ -123,13 +173,31 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertTrue(reason?.contains("deny-list") ?? false)
     }
 
+    /// Verifies that deny-list matching ignores letter case.
     func testRS09_DenyListedMatchingIsCaseInsensitive() {
         let app = AppTarget(processId: 1, processName: "BitWarden", windowTitle: "Vault")
         XCTAssertNotNil(policy.isAppDenied(app))
     }
 
+    /// Verifies that a renamed deny-listed binary is still caught by its executable path.
+    func testRS09_DenyListedBinary_RenamedStillCaughtByExecutablePath() {
+        // A renamed binary keeps the original name in its path, so the path check must catch
+        // what the process and bundle names would miss.
+        let app = AppTarget(
+            processId: 1,
+            processName: "vault-helper",
+            executablePath: "/Applications/1Password.app/Contents/MacOS/vault-helper",
+            windowTitle: "Vault"
+        )
+
+        let reason = policy.isAppDenied(app)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.contains("deny-list") ?? false, reason ?? "")
+    }
+
     // MARK: - RS10: deletion goals are strictly prohibited
 
+    /// Verifies that deletion goals are strictly prohibited.
     func testRS10_DeletionGoals_AreStrictlyProhibited() {
         let goals = [
             "delete all temp files",
@@ -148,6 +216,7 @@ final class RiskPolicyTests: XCTestCase {
         }
     }
 
+    /// Verifies that benign goals are not prohibited.
     func testRS10_BenignGoals_AreNotProhibited() {
         let goals = [
             "open spotify",
@@ -184,6 +253,7 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertNotNil(policy.isGoalProhibited("ERASE"))               // case-insensitive
     }
 
+    /// Verifies that blank or whitespace-only goals are allowed.
     func testRS10_BlankGoalsAreAllowed() {
         XCTAssertNil(policy.isGoalProhibited(""))
         XCTAssertNil(policy.isGoalProhibited("   "))
@@ -191,6 +261,7 @@ final class RiskPolicyTests: XCTestCase {
 
     // MARK: - RS11: deletion action labels are strictly prohibited
 
+    /// Verifies that deletion action labels are strictly prohibited.
     func testRS11_DeletionActionLabels_AreStrictlyProhibited() {
         let labels = ["Delete", "Erase All", "Wipe Disk", "Truncate Table", "Format Disk", "Destroy"]
 
@@ -204,6 +275,7 @@ final class RiskPolicyTests: XCTestCase {
         }
     }
 
+    /// Verifies that typed deletion text is prohibited.
     func testRS11_TypedDeletionText_IsProhibited() {
         let decision = AgentDecision(
             operation: .typeText,
@@ -216,6 +288,7 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertTrue(reason?.lowercased().contains("prohibited") ?? false)
     }
 
+    /// Verifies that deletion text sent through type-and-enter is prohibited.
     func testRS11_TypedDeletionTextOnTypeAndEnter_IsProhibited() {
         // TypeAndEnter carries its payload in textValue too; it must be inspected just like
         // a plain TypeText action.
@@ -230,6 +303,7 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertTrue(reason?.lowercased().contains("prohibited") ?? false)
     }
 
+    /// Verifies that benign type-and-enter text is allowed.
     func testRS11_BenignTypeAndEnterText_IsAllowed() {
         let decision = AgentDecision(
             operation: .typeAndEnter,
@@ -240,6 +314,7 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertNil(policy.isActionProhibited(decision: decision, target: nil, goal: "search"))
     }
 
+    /// Verifies that a deletion term carried in the target element value is prohibited.
     func testRS11_DeletionInTargetValue_IsProhibited() {
         let decision = AgentDecision(operation: .click, targetId: "e1")
         let element = AccessibilityElement(
@@ -248,6 +323,7 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertNotNil(policy.isActionProhibited(decision: decision, target: element, goal: "organize"))
     }
 
+    /// Verifies that a benign action on a benign target is allowed.
     func testRS11_BenignAction_IsAllowed() {
         let decision = AgentDecision(operation: .click, targetId: "e1", targetLabel: "Submit Application")
         let element = AccessibilityElement(id: "e1", role: "Button", label: "Submit Application")
@@ -255,8 +331,45 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertNil(policy.isActionProhibited(decision: decision, target: element, goal: "apply"))
     }
 
+    // MARK: - RS14: any decision-supplied text is inspected, whatever the operation
+
+    /// Verifies that decision-supplied text is prohibited even on a click operation.
+    func testRS14_DecisionSuppliedTextOnAClick_IsProhibited() {
+        // A hostile decision can attach a payload to an operation that does not normally
+        // carry text. The payload must still be inspected before it reaches the executor.
+        let decision = AgentDecision(
+            operation: .click, targetId: "e1", targetLabel: "Search Box",
+            textValue: "delete everything")
+
+        let reason = policy.isActionProhibited(decision: decision, target: nil, goal: "search")
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.lowercased().contains("prohibited") ?? false, reason ?? "")
+    }
+
+    /// Verifies that obfuscated deletion terms wrapped in zero-width or bidi characters are prohibited.
+    func testRS14_ObfuscatedDeletionTerm_IsProhibited() {
+        // Zero-width and bidi control characters must not smuggle a deletion term past the
+        // matcher. This covers the code points the normaliser previously missed.
+        let smuggled = [
+            "de\u{200B}lete the file",
+            "de\u{00AD}lete the file",
+            "de\u{2066}lete the file",
+            "de\u{200E}lete the file",
+            "de\u{2069}lete the file",
+        ]
+
+        for text in smuggled {
+            XCTAssertNotNil(policy.isGoalProhibited(text), "goal should be prohibited: \(text.debugDescription)")
+            let decision = AgentDecision(operation: .typeText, targetId: "e1", textValue: text)
+            XCTAssertNotNil(
+                policy.isActionProhibited(decision: decision, target: nil, goal: "organize"),
+                "action text should be prohibited: \(text.debugDescription)")
+        }
+    }
+
     // MARK: - RS08 (MockJobPage): prompt injection through screen text
 
+    /// Verifies that a deletion term injected through screen text is prohibited.
     func testRS08_PromptInjection_DeletionInScreenText_IsProhibited() {
         let maliciousButton = AccessibilityElement(
             id: "e10",
@@ -275,15 +388,18 @@ final class RiskPolicyTests: XCTestCase {
 
     // MARK: - Options
 
+    /// Verifies that default options expose the expected prohibited terms, deny list, and flags.
     func testDefaultOptions_ExposeProhibitedTermsAndDenyList() {
         let options = RiskPolicyOptions()
-        XCTAssertTrue(options.sensitiveVerbs.isEmpty)
+        XCTAssertFalse(options.sensitiveVerbs.isEmpty)
+        XCTAssertTrue(options.sensitiveVerbs.contains("password"))
         XCTAssertTrue(options.prohibitedTerms.contains("delete"))
         XCTAssertTrue(options.denyListedProcesses.contains("bitwarden"))
-        XCTAssertFalse(options.requireConfirmationOnSensitiveText)
+        XCTAssertTrue(options.requireConfirmationOnSensitiveText)
         XCTAssertEqual(options.escalateOnRiskScore, .irreversibleOrExternalEffect)
     }
 
+    /// Verifies that custom prohibited terms replace the defaults rather than extend them.
     func testCustomProhibitedTerms_ReplaceDefaults() {
         let options = RiskPolicyOptions()
         options.prohibitedTerms = ["banana"]
@@ -293,6 +409,7 @@ final class RiskPolicyTests: XCTestCase {
         XCTAssertNil(custom.isGoalProhibited("delete the file"))
     }
 
+    /// Verifies that action risk scores order by increasing severity.
     func testActionRiskScoreOrdersBySeverity() {
         XCTAssertLessThan(ActionRiskScore.harmless, ActionRiskScore.reversibleEdit)
         XCTAssertLessThan(ActionRiskScore.reversibleEdit, ActionRiskScore.irreversibleOrExternalEffect)

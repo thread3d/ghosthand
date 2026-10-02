@@ -13,11 +13,13 @@ private final class FakeScreenReader: ScreenReader {
     private(set) var readCount = 0
     private(set) var readTargets: [AppTarget] = []
 
+    /// Creates a fake screen reader returning the given elements or throwing the given error.
     init(elements: [AccessibilityElement] = [], thrownError: Error? = nil) {
         self.elements = elements
         self.thrownError = thrownError
     }
 
+    /// Records the target and returns the provided elements, optionally after a delay.
     func readElements(target: AppTarget) async throws -> [AccessibilityElement] {
         readCount += 1
         readTargets.append(target)
@@ -39,11 +41,13 @@ private final class FakeDecisionModel: DecisionModel {
     private(set) var verifyTargets: [AppTarget] = []
     private(set) var observedElements: [[AccessibilityElement]] = []
 
+    /// Creates a fake decision model with a queued decision list and a verification result.
     init(decisions: [AgentDecision] = [], verifyResult: Bool = true) {
         self.decisions = decisions
         self.verifyResult = verifyResult
     }
 
+    /// Returns the next queued decision, or a done decision when the queue is empty.
     func decideNextAction(
         goal: String,
         target: AppTarget,
@@ -58,6 +62,7 @@ private final class FakeDecisionModel: DecisionModel {
         return decisions.removeFirst()
     }
 
+    /// Records the verify target and returns the configured verification result.
     func verifyCompletion(
         goal: String,
         target: AppTarget,
@@ -69,6 +74,7 @@ private final class FakeDecisionModel: DecisionModel {
         return verifyResult
     }
 
+    /// Always reports the action as harmless.
     func evaluateActionRisk(
         goal: String,
         target: AppTarget,
@@ -86,10 +92,12 @@ private final class FakeActionExecutor: ActionExecutorProtocol {
     private(set) var executed: [AgentDecision] = []
     private(set) var executedTargets: [AccessibilityElement?] = []
 
+    /// Creates a fake executor returning the given result by default.
     init(result: ActionResult = .successResult("Executed")) {
         self.result = result
     }
 
+    /// Records the executed decision and target, then returns the configured result.
     func execute(decision: AgentDecision, targetElement: AccessibilityElement?) async throws -> ActionResult {
         executed.append(decision)
         executedTargets.append(targetElement)
@@ -101,6 +109,7 @@ private final class FakeActionExecutor: ActionExecutorProtocol {
 private final class FakeAuditLog: AuditLog {
     private(set) var entries: [AuditLogEntry] = []
 
+    /// Appends the entry to the in-memory list of recorded audit entries.
     func log(_ entry: AuditLogEntry) async {
         entries.append(entry)
     }
@@ -110,6 +119,7 @@ private final class FakeConfirmationPrompt: ConfirmationPrompt {
     var approved = true
     private(set) var requestCount = 0
 
+    /// Counts the request and returns the configured approval answer.
     func requestConfirmation(
         decision: AgentDecision,
         target: AccessibilityElement?,
@@ -125,6 +135,7 @@ private final class FakeWindowTracker: WindowTracker {
     var activeTarget: AppTarget?
     private(set) var queryCount = 0
 
+    /// Counts the query and returns the configured active target.
     func getActiveTarget(current: AppTarget) -> AppTarget? {
         queryCount += 1
         return activeTarget
@@ -137,10 +148,12 @@ private final class FakeWindowTracker: WindowTracker {
 /// `GhostHand.Tests.Safety.RiskPolicyTests` / `MockJobPageTests`, driven entirely by
 /// hand-written in-memory fakes.
 final class AgentLoopTests: XCTestCase {
+    /// Returns a test app target with a fixed process identifier and window title.
     private func testTarget(processName: String = "TestApp") -> AppTarget {
         AppTarget(processId: 1234, processName: processName, windowTitle: "Test App Window")
     }
 
+    /// Returns loop options with the given step and stall caps.
     private func options(maxSteps: Int = 5, maxConsecutiveStalls: Int = 15) -> AgentLoopOptions {
         var options = AgentLoopOptions()
         options.maxSteps = maxSteps
@@ -148,6 +161,7 @@ final class AgentLoopTests: XCTestCase {
         return options
     }
 
+    /// Returns an enabled button element with the given identifier, label, and role.
     private func button(
         _ id: String,
         label: String = "Search Button",
@@ -160,6 +174,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: RS12 — prohibited goal fails immediately, before touching the screen
 
+    /// Verifies that a prohibited goal fails immediately without reading the screen.
     func testRS12_prohibitedGoal_failsImmediately_withoutReadingScreen() async {
         let reader = FakeScreenReader(elements: [button("e1")])
         let model = FakeDecisionModel()
@@ -193,6 +208,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: RS09 — deny-listed app refused immediately
 
+    /// Verifies that each deny-listed app fails immediately without reading the screen.
     func testRS09_denyListedApp_failsImmediately_withoutReadingScreen() async {
         let deniedNames = ["1password", "bitwarden", "keepass", "keepassxc", "lastpass", "dashlane"]
 
@@ -227,6 +243,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: RS09 — a deny-listed app that becomes the target mid-run is refused
 
+    /// Verifies that a deny-listed app becoming the active target mid-run is refused without reading it.
     func testRS09_denyListedApp_afterWindowTrackerSwitch_failsWithoutReadingScreen() async {
         let reader = FakeScreenReader(elements: [button("e1")])
         let model = FakeDecisionModel()
@@ -255,6 +272,7 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertTrue(audit.entries.contains(where: { $0.decisionType == "denied" && $0.appProcess == "1password" }))
     }
 
+    /// Verifies that a deny-listed app launched by the executor fails without further steps.
     func testRS09_denyListedApp_afterExecutorNewTarget_failsWithoutFurtherSteps() async {
         let launched = AppTarget(
             processId: 2000, processName: "bitwarden", windowTitle: "Vault", windowHandle: 0x2000)
@@ -286,8 +304,124 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertTrue(audit.entries.contains(where: { $0.decisionType == "denied" && $0.appProcess == "bitwarden" }))
     }
 
+    // MARK: RS09 — a launch of a deny-listed app is refused before it executes
+
+    /// Verifies that launching a deny-listed app is refused before it reaches the executor.
+    func testRS09_openAppDenyListed_refusedBeforeExecuting() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(decisions: [
+            AgentDecision(operation: .openApp, targetId: "1password", targetLabel: "1password"),
+        ])
+        let executor = FakeActionExecutor()
+        let audit = FakeAuditLog()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(),
+            riskPolicy: DefaultRiskPolicy(),
+            auditLog: audit
+        )
+
+        let result = await loop.run(goal: "open 1password", target: testTarget())
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertTrue(result.message?.contains("deny-list") ?? false, "Message was: \(result.message ?? "")")
+        XCTAssertEqual(executor.executed.count, 0, "a deny-listed launch must never reach the executor")
+        XCTAssertTrue(audit.entries.contains { $0.decisionType == "denied" && $0.reason?.contains("deny-list") == true })
+    }
+
+    // MARK: RS14 — credential writes require confirmation by default
+
+    /// Verifies that credential typing without a confirmation prompt fails closed.
+    func testRS14_credentialTyping_withoutPrompt_failsClosed() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(decisions: [
+            AgentDecision(operation: .typeText, targetId: "e1", targetLabel: "Search", textValue: "my password is hunter2"),
+        ])
+        let executor = FakeActionExecutor()
+        let audit = FakeAuditLog()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(),
+            riskPolicy: DefaultRiskPolicy(),
+            auditLog: audit
+        )
+
+        let result = await loop.run(goal: "sign in", target: testTarget())
+
+        XCTAssertEqual(result.status, .needsHumanInput)
+        XCTAssertEqual(executor.executed.count, 0, "an unconfirmed credential write must not execute")
+        XCTAssertTrue(audit.entries.contains { $0.decisionType == "denied" })
+    }
+
+    /// Verifies that credential typing executes when the confirmation prompt approves it.
+    func testRS14_credentialTyping_withApprovedPrompt_executes() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(decisions: [
+            AgentDecision(operation: .typeText, targetId: "e1", targetLabel: "Search", textValue: "my password is hunter2"),
+            AgentDecision(operation: .done),
+        ])
+        let executor = FakeActionExecutor()
+        let prompt = FakeConfirmationPrompt()
+        prompt.approved = true
+        let audit = FakeAuditLog()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(),
+            riskPolicy: DefaultRiskPolicy(),
+            confirmationPrompt: prompt,
+            auditLog: audit
+        )
+
+        let result = await loop.run(goal: "sign in", target: testTarget())
+
+        XCTAssertEqual(prompt.requestCount, 1)
+        XCTAssertEqual(executor.executed.count, 1)
+        XCTAssertTrue(executor.executed.first?.operation == .typeText)
+        XCTAssertTrue(audit.entries.contains { $0.decisionType == "confirmed" })
+        XCTAssertNotEqual(result.status, .failed)
+    }
+
+    /// Verifies that credential typing is cancelled without executing when the prompt declines.
+    func testRS14_credentialTyping_withDeclinedPrompt_cancelsWithoutExecuting() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(decisions: [
+            AgentDecision(operation: .typeText, targetId: "e1", targetLabel: "Search", textValue: "my password is hunter2"),
+        ])
+        let executor = FakeActionExecutor()
+        let prompt = FakeConfirmationPrompt()
+        prompt.approved = false
+        let audit = FakeAuditLog()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(),
+            riskPolicy: DefaultRiskPolicy(),
+            confirmationPrompt: prompt,
+            auditLog: audit
+        )
+
+        let result = await loop.run(goal: "sign in", target: testTarget())
+
+        XCTAssertEqual(result.status, .cancelled)
+        XCTAssertEqual(prompt.requestCount, 1)
+        XCTAssertEqual(executor.executed.count, 0)
+        XCTAssertTrue(audit.entries.contains { $0.decisionType == "rejected" })
+    }
+
     // MARK: Done + verified => completed
 
+    /// Verifies that a done decision confirmed by verification completes the run.
     func testDoneAndVerified_returnsCompleted() async {
         let reader = FakeScreenReader(elements: [button("e1")])
         let model = FakeDecisionModel(decisions: [AgentDecision(operation: .done)], verifyResult: true)
@@ -310,6 +444,7 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertEqual(executor.executed.count, 0)
     }
 
+    /// Verifies that an unverified done decision keeps looping until the max-step cap.
     func testDoneButNotVerified_keepsLoopingUntilMaxSteps() async {
         // A model that always reports Done but never verifies must not be trusted.
         let reader = FakeScreenReader(elements: [button("e1")])
@@ -334,6 +469,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: askUser => needsHumanInput
 
+    /// Verifies that an ask-user decision returns a needs-human-input result with its message.
     func testAskUser_returnsNeedsHumanInput() async {
         let reader = FakeScreenReader(elements: [button("e1")])
         let model = FakeDecisionModel(decisions: [
@@ -359,6 +495,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: EX04 — a failed action fails the run at that step
 
+    /// Verifies that a failed action fails the run at that step and surfaces the message.
     func testFailedAction_returnsFailed() async {
         let reader = FakeScreenReader(elements: [button("e1", label: "Btn")])
         let model = FakeDecisionModel(decisions: [
@@ -385,6 +522,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: AL05 — executor newTarget switches the active target
 
+    /// Verifies that an executor target change switches the active target and is observed downstream.
     func testExecutorNewTarget_switchesTarget() async {
         let launched = AppTarget(
             processId: 2000, processName: "SystemSettings", windowTitle: "Settings", windowHandle: 0x2000)
@@ -421,6 +559,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: Cancellation
 
+    /// Verifies that cancelling the running task returns a cancelled result.
     func testCancellation_returnsCancelled() async {
         let reader = FakeScreenReader(elements: [])
         reader.delayNanoseconds = 2_000_000_000 // never actually waited: cancelled immediately
@@ -443,6 +582,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: RS13 — a prohibited action aborts without executing
 
+    /// Verifies that a prohibited action aborts the run without executing or prompting.
     func testRS13_prohibitedAction_abortsWithoutExecuting() async {
         let deleteButton = AccessibilityElement(
             id: "del_btn", role: "Button", label: "Delete", enabled: true,
@@ -479,6 +619,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: RS04 — a safe action executes directly, with no confirmation prompt
 
+    /// Verifies that a safe action executes directly without asking for confirmation.
     func testRS04_safeAction_executedDirectly_withoutPrompt() async {
         let safeElement = button("e1", label: "Submit Application")
         let safeDecision = AgentDecision(operation: .click, targetId: "e1", targetLabel: "Submit Application")
@@ -511,6 +652,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: EX06 — the max-step cap stops the run
 
+    /// Verifies that the maximum step cap stops the run at the configured limit.
     func testEX06_maxStepCap_stopsRun() async {
         var stepCounter = 0
         let reader = FakeScreenReader()
@@ -543,6 +685,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: RS07 — a mock job application is filled and submitted with no prompt
 
+    /// Verifies that a mock job application is filled and submitted fully automatically.
     func testRS07_mockJobApplication_fillsFormAndSubmits_fullyAutomatically() async {
         var executedActions: [AgentDecision] = []
 
@@ -601,6 +744,7 @@ final class AgentLoopTests: XCTestCase {
 
     // MARK: AgentLoopOptions (pure, no environment mutation)
 
+    /// Verifies the default values of the agent loop options.
     func testAgentLoopOptionsDefaults() {
         let defaults = AgentLoopOptions()
         XCTAssertEqual(defaults.maxSteps, 0) // 0 = unlimited

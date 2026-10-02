@@ -7,6 +7,7 @@ import XCTest
 /// Port of the pure parts of `GhostHand.Tests.ScreenReading.ScreenReaderTests` (RD03) plus
 /// coverage for every pattern the Swift sanitizer recognises.
 final class SecretSanitizerTests: XCTestCase {
+    /// Verifies password-flagged fields always sanitize to the password placeholder.
     func testPasswordFields_AlwaysBecomePasswordPlaceholder() {
         XCTAssertEqual(SecretSanitizer.sanitize("SuperSecretP@ssword123!", isPassword: true), "[PASSWORD]")
         // The password flag wins even over an empty string.
@@ -14,6 +15,7 @@ final class SecretSanitizerTests: XCTestCase {
         XCTAssertEqual(SecretSanitizer.sanitize(nil, isPassword: true), "[PASSWORD]")
     }
 
+    /// Verifies credit card numbers are redacted in separated, dashed, and compact forms.
     func testCreditCardNumbers_AreRedacted() {
         let separated = "Please bill credit card 4111 2222 3333 4444 for $50"
         let sanitizedSeparated = SecretSanitizer.sanitize(separated)
@@ -29,6 +31,7 @@ final class SecretSanitizerTests: XCTestCase {
         XCTAssertEqual(SecretSanitizer.sanitize(compact), "[REDACTED_CARD]")
     }
 
+    /// Verifies API key patterns are redacted from surrounding text.
     func testApiKeys_AreRedacted() {
         let samples = [
             "vck_dummy_test_key_sample1234567890abcdef",
@@ -44,6 +47,7 @@ final class SecretSanitizerTests: XCTestCase {
         }
     }
 
+    /// Verifies a JWT is redacted as an API key.
     func testJwt_IsRedacted() {
         let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
         let sanitized = SecretSanitizer.sanitize("auth=\(jwt)")
@@ -52,6 +56,7 @@ final class SecretSanitizerTests: XCTestCase {
         XCTAssertTrue(sanitized.contains("[REDACTED_KEY]"))
     }
 
+    /// Verifies bearer tokens are redacted while the Bearer scheme is preserved.
     func testBearerTokens_AreRedacted_KeepingTheScheme() {
         let token = "my_secret_token_1234567890_abcdef"
         let sanitized = SecretSanitizer.sanitize("Authorization: Bearer \(token)")
@@ -60,11 +65,26 @@ final class SecretSanitizerTests: XCTestCase {
         XCTAssertTrue(sanitized.contains("Bearer [REDACTED]"))
     }
 
+    /// Verifies a whole PEM private-key block is redacted, body included.
+    func testPemPrivateKeys_AreFullyRedacted() {
+        // The key body — not just the BEGIN marker — must be removed, or the secret survives
+        // redaction in the model prompt and the audit log.
+        let pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAsecretkeymaterial\n-----END RSA PRIVATE KEY-----"
+        let sanitized = SecretSanitizer.sanitize("key:\n\(pem)\ndone")
+
+        XCTAssertFalse(sanitized.contains("MIIEowIBAAKCAQEAsecretkeymaterial"))
+        XCTAssertFalse(sanitized.contains("BEGIN RSA PRIVATE KEY"))
+        XCTAssertFalse(sanitized.contains("END RSA PRIVATE KEY"))
+        XCTAssertTrue(sanitized.contains("[REDACTED_PRIVATE_KEY]"))
+    }
+
+    /// Verifies ordinary text passes through the sanitizer unchanged.
     func testOrdinaryText_IsUntouched() {
         let text = "Submit Application Form for Alice Smith"
         XCTAssertEqual(SecretSanitizer.sanitize(text), text)
     }
 
+    /// Verifies nil and empty input both sanitize to an empty string.
     func testNilAndEmptyText_ReturnEmptyString() {
         XCTAssertEqual(SecretSanitizer.sanitize(nil), "")
         XCTAssertEqual(SecretSanitizer.sanitize(""), "")
@@ -76,6 +96,7 @@ final class SecretSanitizerTests: XCTestCase {
 /// Port of `GhostHand.Tests.ScreenReading.ScreenReaderTests` RD02/RD04 plus focused tests
 /// for the port-only canonical-role map.
 final class ElementRankerTests: XCTestCase {
+    /// Builds screen reader options with the given node, candidate, and filter settings.
     private func options(
         maxNodes: Int = 500,
         maxCandidates: Int = 40,
@@ -90,6 +111,7 @@ final class ElementRankerTests: XCTestCase {
         return options
     }
 
+    /// Builds an accessibility element with the given identity, role, and attributes.
     private func element(
         _ id: String,
         role: String,
@@ -106,6 +128,7 @@ final class ElementRankerTests: XCTestCase {
 
     // MARK: Canonical role mapping
 
+    /// Verifies canonical role mapping passes Windows names through and maps macOS AX names.
     func testCanonicalRole_MapsWindowsAndMacOSRoleNames() {
         // Windows UIA names pass through unchanged.
         XCTAssertEqual(ElementRanker.canonicalRole("Button"), "Button")
@@ -126,11 +149,13 @@ final class ElementRankerTests: XCTestCase {
         XCTAssertEqual(ElementRanker.canonicalRole("AXStaticText"), "Text")
     }
 
+    /// Verifies an unrecognized AX role prefix is stripped and plain roles pass through.
     func testCanonicalRole_StripsUnknownAxPrefix() {
         XCTAssertEqual(ElementRanker.canonicalRole("AXCustomThing"), "CustomThing")
         XCTAssertEqual(ElementRanker.canonicalRole("PlainRole"), "PlainRole")
     }
 
+    /// Verifies interactive detection recognizes both platform role names.
     func testIsInteractive_RecognizesBothPlatformRoleNames() {
         XCTAssertTrue(ElementRanker.isInteractive("Button"))
         XCTAssertTrue(ElementRanker.isInteractive("Edit"))
@@ -144,6 +169,7 @@ final class ElementRankerTests: XCTestCase {
 
     // MARK: rankAndFilter ordering
 
+    /// Verifies ranking puts focused elements first, then interactive ones, with fresh ids.
     func testRankAndFilter_PutsFocusedFirstThenInteractive() {
         let focusedText = element("focused_text", role: "AXStaticText", label: "Focused note", focused: true,
                                   frame: CGRect(x: 0, y: 200, width: 100, height: 30))
@@ -158,6 +184,7 @@ final class ElementRankerTests: XCTestCase {
         XCTAssertEqual(ranked.map(\.id), ["e1", "e2", "e3"])
     }
 
+    /// Verifies ranking assigns sequential ids and caps the candidate count.
     func testRankAndFilter_AssignsSequentialIdsAndCapsCandidates() {
         let elements = (0..<10).map {
             element("raw_\($0)", role: "Button", label: "Item \($0)",
@@ -170,6 +197,7 @@ final class ElementRankerTests: XCTestCase {
         XCTAssertEqual(ranked.map(\.id), ["e1", "e2", "e3"])
     }
 
+    /// Verifies ranking drops zero-size frames while keeping negative origins.
     func testRankAndFilter_DropsZeroSizeFrames() {
         let elements = [
             element("visible", role: "Button", label: "Visible", frame: CGRect(x: 10, y: 10, width: 100, height: 30)),
@@ -185,6 +213,7 @@ final class ElementRankerTests: XCTestCase {
         XCTAssertTrue(ranked.contains { $0.label == "Negative Origin" })
     }
 
+    /// Verifies disabled and offscreen filters apply only when requested.
     func testRankAndFilter_FiltersDisabledWhenRequested() {
         let elements = [
             element("on1", role: "Button", label: "Visible Button"),
@@ -202,6 +231,7 @@ final class ElementRankerTests: XCTestCase {
         XCTAssertFalse(disabledOnly.contains { $0.label == "Disabled Button" })
     }
 
+    /// Verifies ranking respects the maximum node cap.
     func testRankAndFilter_RespectsMaxNodes() {
         let elements = (0..<10).map {
             element("raw_\($0)", role: "Button", label: "Item \($0)")
@@ -213,6 +243,7 @@ final class ElementRankerTests: XCTestCase {
 
     // MARK: RD02 determinism / node cap
 
+    /// Verifies the node cap holds and identical inputs produce identical ids and metadata.
     func testRD02_NodeCap_Enforced_And_IdsStableAcrossIdenticalInputs() {
         var rawElements: [AccessibilityElement] = []
         for i in 0..<600 {

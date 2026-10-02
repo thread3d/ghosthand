@@ -3,6 +3,7 @@ import Foundation
 
 // MARK: - ScreenReaderOptions
 
+/// Limits and filters applied while reading and ranking the accessibility tree.
 public struct ScreenReaderOptions: Sendable {
     public var maxNodes: Int = 500
     public var maxDepth: Int = 30
@@ -11,6 +12,7 @@ public struct ScreenReaderOptions: Sendable {
     public var filterOffscreen: Bool = true
     public var filterDisabled: Bool = false
 
+    /// Creates screen reader options populated with the default capture and ranking limits.
     public init() {}
     public static let `default` = ScreenReaderOptions()
 }
@@ -20,6 +22,7 @@ public struct ScreenReaderOptions: Sendable {
 // Port of GhostHand.Core.ScreenReading.SecretSanitizer. Password fields and
 // card/key/bearer patterns never escape toward the model or the audit log.
 
+/// Redacts secrets from accessibility text before it reaches the model or audit log.
 public enum SecretSanitizer {
     private static let cardRegex = try! NSRegularExpression(
         pattern: #"\b(?:\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{1,4}|\d{13,16})\b"#
@@ -31,7 +34,18 @@ public enum SecretSanitizer {
         pattern: #"(Bearer\s+)[a-zA-Z0-9_\-\.]{15,}"#,
         options: [.caseInsensitive]
     )
+    /// A whole PEM private-key block. The body carries the actual key material, so the
+    /// marker alone is not enough: the entire block has to be redacted.
+    private static let privateKeyBlockRegex = try! NSRegularExpression(
+        pattern: #"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"#
+    )
+    /// Any leftover PEM header/footer from a truncated or malformed key.
+    private static let privateKeyMarkerRegex = try! NSRegularExpression(
+        pattern: #"-----BEGIN [A-Z ]*PRIVATE KEY-----|-----END [A-Z ]*PRIVATE KEY-----"#
+    )
 
+    /// Returns `text` with password, payment-card, API-key, bearer-token, and PEM
+    /// private-key content redacted.
     public static func sanitize(_ text: String?, isPassword: Bool = false) -> String {
         if isPassword { return "[PASSWORD]" }
         guard let text, !text.isEmpty else { return "" }
@@ -39,10 +53,14 @@ public enum SecretSanitizer {
         var result = text
         result = replace(cardRegex, in: result, with: "[REDACTED_CARD]")
         result = replace(apiKeyRegex, in: result, with: "[REDACTED_KEY]")
+        // Redact the complete block first, then any orphaned marker left behind.
+        result = replace(privateKeyBlockRegex, in: result, with: "[REDACTED_PRIVATE_KEY]")
+        result = replace(privateKeyMarkerRegex, in: result, with: "[REDACTED_PRIVATE_KEY]")
         result = replace(bearerRegex, in: result, with: "$1[REDACTED]")
         return result
     }
 
+    /// Returns `text` with every match of `regex` replaced by `template`.
     private static func replace(_ regex: NSRegularExpression, in text: String, with template: String) -> String {
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: template)
@@ -54,6 +72,7 @@ public enum SecretSanitizer {
 // Port of GhostHand.Core.ScreenReading.ElementRanker, extended with a canonical-role
 // map so Windows UIA role names and macOS AX role names rank identically.
 
+/// Ranks accessibility elements and maps platform role names to canonical roles.
 public enum ElementRanker {
     public static let interactiveRoles: Set<String> = [
         "Button", "MenuItem", "TabItem", "Hyperlink", "CheckBox",
@@ -91,10 +110,12 @@ public enum ElementRanker {
         }
     }
 
+    /// Returns whether `role` maps to a canonical interactive control.
     public static func isInteractive(_ role: String) -> Bool {
         interactiveRoles.contains(canonicalRole(role))
     }
 
+    /// Filters, sorts, and renumbers accessibility elements into decision candidates.
     public static func rankAndFilter(
         _ elements: [AccessibilityElement],
         options: ScreenReaderOptions
@@ -125,6 +146,7 @@ public enum ElementRanker {
         }
     }
 
+    /// Returns whether the element has a non-empty, on-screen frame.
     private static func isOnScreen(_ element: AccessibilityElement) -> Bool {
         element.frame.width > 0 && element.frame.height > 0
     }

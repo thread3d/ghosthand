@@ -4,6 +4,7 @@ import Foundation
 //
 // Port of GhostHand.Core.Agent.AgentRunStatus and AgentRunResult.
 
+/// Outcome category reported at the end of an agent run.
 public enum AgentRunStatus: String, Sendable {
     case completed = "Completed"
     case needsHumanInput = "NeedsHumanInput"
@@ -13,35 +14,42 @@ public enum AgentRunStatus: String, Sendable {
     case failed = "Failed"
 }
 
+/// Final outcome of an agent run, including the steps taken and a human-readable message.
 public struct AgentRunResult: Sendable {
     public var status: AgentRunStatus
     public var stepsCompleted: Int
     public var actionHistory: [String]
     public var message: String?
 
+    /// Creates a result indicating the goal was achieved, with a success message.
     public static func completed(steps: Int, history: [String]) -> AgentRunResult {
         AgentRunResult(status: .completed, stepsCompleted: steps, actionHistory: history, message: "Goal successfully achieved.")
     }
 
+    /// Creates a result asking for human guidance, using the supplied reason when present.
     public static func needsHumanInput(steps: Int, history: [String], reason: String?) -> AgentRunResult {
         AgentRunResult(status: .needsHumanInput, stepsCompleted: steps, actionHistory: history,
                        message: reason ?? "Human input required.")
     }
 
+    /// Creates a result for a stalled loop, using the supplied reason or a default explanation.
     public static func stalled(steps: Int, history: [String], reason: String?) -> AgentRunResult {
         AgentRunResult(status: .stalled, stepsCompleted: steps, actionHistory: history,
                        message: reason ?? "Loop guard tripped: screen state unchanged.")
     }
 
+    /// Creates a result stating that the run reached its configured step limit.
     public static func maxStepsReached(steps: Int, history: [String]) -> AgentRunResult {
         AgentRunResult(status: .maxStepsReached, stepsCompleted: steps, actionHistory: history,
                        message: "Reached maximum step limit (\(steps)).")
     }
 
+    /// Creates a failed result carrying the supplied error message.
     public static func failed(steps: Int, history: [String], error: String) -> AgentRunResult {
         AgentRunResult(status: .failed, stepsCompleted: steps, actionHistory: history, message: error)
     }
 
+    /// Creates a result indicating the run was cancelled before completion.
     public static func cancelled(steps: Int, history: [String]) -> AgentRunResult {
         AgentRunResult(status: .cancelled, stepsCompleted: steps, actionHistory: history, message: "Run was cancelled.")
     }
@@ -51,6 +59,7 @@ public struct AgentRunResult: Sendable {
 //
 // Port of GhostHand.Core.Agent.AgentLoop: observe -> decide -> safety-gate -> execute -> verify.
 
+/// Drives the observe-decide-gate-execute agent loop against a target application.
 public final class AgentLoop {
     private let screenReader: ScreenReader
     private let decisionModel: DecisionModel
@@ -65,6 +74,7 @@ public final class AgentLoop {
     public var onStepCompleted: ((Int, AgentDecision, ActionResult) -> Void)?
     public var onTargetChanged: ((AppTarget) -> Void)?
 
+    /// Creates a loop with the collaborators and options needed to observe, decide, and act.
     public init(
         screenReader: ScreenReader,
         decisionModel: DecisionModel,
@@ -85,6 +95,8 @@ public final class AgentLoop {
         self.windowTracker = windowTracker
     }
 
+    /// Runs the observe-decide-gate-execute loop for `goal` on `target` until a terminal
+    /// result is reached, re-checking security policy before every observation and action.
     public func run(goal: String, target: AppTarget) async -> AgentRunResult {
         var currentTarget = target
         var history: [String] = []
@@ -195,13 +207,16 @@ public final class AgentLoop {
                     return .failed(steps: step, history: history, error: actionProhibitedReason)
                 }
 
-                // 8. Safety invariants: Jarvis mode — no confirmation dialogs except for deletion
-                // (already blocked above). Kept as a safety net for future policy changes.
+                // 8. Safety invariants: honour the risk policy's confirmation requirement.
+                // The default policy auto-executes safe actions but requires confirmation for
+                // credential writes, so this gate is live by default. It fails closed: a
+                // required confirmation with no prompt available refuses the action instead
+                // of pretending a human approved it.
                 if let riskReason = riskPolicy.requiresConfirmation(
                     decision: decision, target: targetElement, appTarget: currentTarget) {
-                    let approved = await confirmationPrompt?.requestConfirmation(
-                        decision: decision, target: targetElement, appTarget: currentTarget, reason: riskReason) ?? false
-                    if !approved {
+                    guard let confirmationPrompt else {
+                        GhostLog.shared.error("Policy requires confirmation but no confirmation prompt is configured. Refusing action.")
+                        notifyStatus("Confirmation required but unavailable: \(riskReason)")
                         if let auditLog {
                             await auditLog.log(AuditLogEntry(
                                 goal: goal, operation: decision.operation,
@@ -209,11 +224,13 @@ public final class AgentLoop {
                                 targetLabel: targetElement?.displayLabel ?? decision.targetLabel,
                                 targetRole: targetElement?.displayRole,
                                 appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
-                                decisionType: "rejected", reason: riskReason))
+                                decisionType: "denied", reason: riskReason))
                         }
-                        notifyStatus("Action rejected by human.")
-                        return .cancelled(steps: step, history: history)
+                        return .needsHumanInput(steps: step, history: history, reason: riskReason)
                     }
+
+                    let approved = await confirmationPrompt.requestConfirmation(
+                        decision: decision, target: targetElement, appTarget: currentTarget, reason: riskReason)
                     if let auditLog {
                         await auditLog.log(AuditLogEntry(
                             goal: goal, operation: decision.operation,
@@ -221,7 +238,11 @@ public final class AgentLoop {
                             targetLabel: targetElement?.displayLabel ?? decision.targetLabel,
                             targetRole: targetElement?.displayRole,
                             appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
-                            decisionType: "confirmed", reason: riskReason))
+                            decisionType: approved ? "confirmed" : "rejected", reason: riskReason))
+                    }
+                    if !approved {
+                        notifyStatus("Action rejected by human.")
+                        return .cancelled(steps: step, history: history)
                     }
                 } else if let auditLog {
                     await auditLog.log(AuditLogEntry(
@@ -233,7 +254,27 @@ public final class AgentLoop {
                         decisionType: "auto", reason: "Harmless action allowed by safety policy."))
                 }
 
-                // 9. Execute action (dry-run or live).
+                // 9. Continuous authorization: the deny-list is an invariant, not an entry
+                // check. Re-validate the current target immediately before acting, and refuse
+                // a launch whose application is deny-listed *before* it can open.
+                if let denyReason = await denyListRefusal(goal: goal, target: currentTarget) {
+                    return .failed(steps: step, history: history, error: denyReason)
+                }
+                if let launchReason = riskPolicy.launchDenial(for: decision) {
+                    GhostLog.shared.warning("Launch refused by app deny-list: \(launchReason)")
+                    notifyStatus("Security policy refusal: \(launchReason)")
+                    if let auditLog {
+                        await auditLog.log(AuditLogEntry(
+                            goal: goal, operation: decision.operation,
+                            targetId: decision.targetId,
+                            targetLabel: decision.targetLabel,
+                            appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
+                            decisionType: "denied", reason: launchReason))
+                    }
+                    return .failed(steps: step, history: history, error: launchReason)
+                }
+
+                // 10. Execute action (dry-run or live).
                 let actionLabel = targetElement != nil ? "'\(targetElement!.displayLabel)'" : (decision.targetId ?? "")
                 notifyStatus("\(stepPrefix): \(decision.operation.rawValue) on \(actionLabel)")
 
@@ -290,6 +331,7 @@ public final class AgentLoop {
         return denyReason
     }
 
+    /// Logs a status message and forwards it to the `onStatusChanged` callback.
     private func notifyStatus(_ message: String) {
         GhostLog.shared.debug("[AgentLoop] \(message)")
         onStatusChanged?(message)
