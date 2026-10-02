@@ -96,7 +96,8 @@ public final class AgentLoop {
     }
 
     /// Runs the observe-decide-gate-execute loop for `goal` on `target` until a terminal
-    /// result is reached, re-checking security policy before every observation and action.
+    /// result is reached, re-checking security policy before every observation and action and
+    /// refusing to drive a live executor when the run was asked to simulate (`options.dryRun`).
     public func run(goal: String, target: AppTarget) async -> AgentRunResult {
         var currentTarget = target
         var history: [String] = []
@@ -279,6 +280,28 @@ public final class AgentLoop {
                 // arrived while we were reading, deciding or confirming must stop the run
                 // before the side effect, not after it.
                 try Task.checkCancellation()
+
+                // Dry-run containment: a run that was asked to simulate must never reach a
+                // live executor. The loop cannot simulate platform actions itself, so it
+                // refuses to execute when the executor does not declare that it simulates.
+                // This fails closed rather than trusting the executor to honour a flag it
+                // never received.
+                if options.dryRun, !actionExecutor.simulatesActions {
+                    let message = "Dry run requested but the action executor performs real actions. Refusing to execute."
+                    GhostLog.shared.error(message)
+                    notifyStatus(message)
+                    if let auditLog {
+                        await auditLog.log(AuditLogEntry(
+                            goal: goal, operation: decision.operation,
+                            targetId: decision.targetId,
+                            targetLabel: targetElement?.displayLabel ?? decision.targetLabel,
+                            targetRole: targetElement?.displayRole,
+                            appProcess: currentTarget.processName, appTitle: currentTarget.windowTitle,
+                            decisionType: "denied", reason: message))
+                    }
+                    return .failed(steps: step, history: history, error: message)
+                }
+
                 let actionLabel = targetElement != nil ? "'\(targetElement!.displayLabel)'" : (decision.targetId ?? "")
                 notifyStatus("\(stepPrefix): \(decision.operation.rawValue) on \(actionLabel)")
 

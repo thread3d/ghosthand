@@ -89,6 +89,9 @@ private final class FakeActionExecutor: ActionExecutorProtocol {
     var result: ActionResult
     var resultProvider: (() -> ActionResult)?
     var onExecute: ((AgentDecision, AccessibilityElement?) -> Void)?
+    /// Whether this fake declares itself a simulation; defaults to true because it has no
+    /// real side effects. Set to false to model a live executor under a dry-run gate test.
+    var simulatesActions: Bool = true
     private(set) var executed: [AgentDecision] = []
     private(set) var executedTargets: [AccessibilityElement?] = []
 
@@ -766,6 +769,93 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertTrue(executedActions.contains { $0.operation == .click && $0.targetId == "e3" })
         XCTAssertEqual(prompt.requestCount, 0)
         XCTAssertEqual(result.status, .completed)
+    }
+
+    // MARK: Dry-run containment
+
+    /// Verifies that a dry run refuses to execute through an executor that performs real
+    /// actions, and records the refusal instead of injecting input.
+    func testDryRun_refusesNonSimulatingExecutor_beforeExecuting() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(decisions: [
+            AgentDecision(operation: .click, targetId: "e1", targetLabel: "Search Button"),
+        ])
+        let executor = FakeActionExecutor()
+        executor.simulatesActions = false
+        let audit = FakeAuditLog()
+
+        var opts = options()
+        opts.dryRun = true
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: opts,
+            riskPolicy: DefaultRiskPolicy(),
+            auditLog: audit
+        )
+
+        let result = await loop.run(goal: "search for Adele", target: testTarget())
+
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertTrue(result.message?.contains("Dry run") ?? false, "Message was: \(result.message ?? "")")
+        XCTAssertEqual(executor.executed.count, 0, "a live executor must never be driven by a dry run")
+        XCTAssertEqual(model.decideCount, 1, "the loop must stop at the dry-run gate, not act")
+        XCTAssertTrue(
+            audit.entries.contains { $0.decisionType == "denied" && ($0.reason?.contains("Dry run") ?? false) },
+            "the refusal must be audited")
+    }
+
+    /// Verifies that a dry run through a simulating executor still executes its simulated actions.
+    func testDryRun_allowsSimulatingExecutor() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(decisions: [
+            AgentDecision(operation: .click, targetId: "e1", targetLabel: "Search Button"),
+            AgentDecision(operation: .done),
+        ])
+        let executor = FakeActionExecutor()
+        executor.simulatesActions = true
+
+        var opts = options()
+        opts.dryRun = true
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: opts,
+            riskPolicy: DefaultRiskPolicy()
+        )
+
+        let result = await loop.run(goal: "search for Adele", target: testTarget())
+
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(executor.executed.count, 1, "a simulating executor may run during a dry run")
+    }
+
+    /// Verifies that a live run (dryRun false) is allowed to drive a non-simulating executor.
+    func testLiveRun_allowsNonSimulatingExecutor() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel(decisions: [
+            AgentDecision(operation: .click, targetId: "e1", targetLabel: "Search Button"),
+            AgentDecision(operation: .done),
+        ])
+        let executor = FakeActionExecutor()
+        executor.simulatesActions = false
+
+        var opts = options()
+        opts.dryRun = false
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: opts,
+            riskPolicy: DefaultRiskPolicy()
+        )
+
+        let result = await loop.run(goal: "search for Adele", target: testTarget())
+
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(executor.executed.count, 1, "live mode must not be blocked by the dry-run gate")
     }
 
     // MARK: AgentLoopOptions (pure, no environment mutation)

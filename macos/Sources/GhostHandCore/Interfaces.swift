@@ -40,11 +40,26 @@ public protocol DecisionModel: AnyObject {
 
 /// Performs a single decided action against the target application.
 public protocol ActionExecutorProtocol: AnyObject {
+    /// Whether this executor only simulates actions instead of performing them for real.
+    ///
+    /// `AgentLoop` refuses to run a dry run (`AgentLoopOptions.dryRun == true`) through an
+    /// executor that reports `false` here, so a caller who asked for a simulation can never
+    /// accidentally drive a live executor that injects real input. The default is `false`
+    /// (fail closed): only an executor that explicitly declares simulation is treated as safe
+    /// for a dry run.
+    var simulatesActions: Bool { get }
+
     /// Executes the decision, optionally against a located element, and returns the outcome.
     func execute(
         decision: AgentDecision,
         targetElement: AccessibilityElement?
     ) async throws -> ActionResult
+}
+
+public extension ActionExecutorProtocol {
+    /// Conservative default: an executor that does not declare simulation is treated as live,
+    /// so `AgentLoopOptions.dryRun` refuses to drive it rather than trusting it to simulate.
+    var simulatesActions: Bool { false }
 }
 
 /// Registers the activation and kill-switch keyboard chords.
