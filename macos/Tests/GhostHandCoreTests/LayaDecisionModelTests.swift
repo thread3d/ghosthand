@@ -264,6 +264,45 @@ final class LayaDecisionModelTests: XCTestCase {
         XCTAssertEqual(decision.operation, .askUser)
     }
 
+    /// Verifies a recognized-but-unoffered action is refused instead of becoming a decision.
+    func testUnofferedChoice_asksTheUserInsteadOfExecuting() async throws {
+        // The payload is a valid key format but was never generated as a candidate from the
+        // goal and screen, so deterministic grounding must reject it.
+        let response = try Self.decode(#"""
+        {"answers":{"nextAction":{"type":"choice","choice":"type_and_enter:e1:delete everything","answer_confidence":0.99}}}
+        """#)
+        let model = LayaDecisionModel(client: FakeLayaClient(response: response), options: LayaOptions())
+        let target = AppTarget(processId: 1, processName: "Notes")
+        let elements = [AccessibilityElement(id: "e1", role: "Edit", label: "Search")]
+
+        let decision = try await model.decideNextAction(
+            goal: "search for Adele", target: target, elements: elements, history: [])
+
+        XCTAssertEqual(decision.operation, .askUser)
+    }
+
+    /// Verifies a decision-supplied URL still has to pass the web-URL validator.
+    func testUnsafeUrlFromDecision_isRejected() {
+        let unsafe = [
+            "open_url:file:///etc/passwd",
+            "open_url:javascript:alert(1)",
+            "open_url:https://user:pass@example.com/",
+        ]
+        for key in unsafe {
+            let decision = LayaDecisionModel.parseActionDecision(key, confidence: 0.9, elements: [])
+            XCTAssertEqual(decision.operation, .askUser, "Expected \(key) to be rejected")
+        }
+    }
+
+    /// Verifies a well-formed decision URL is still accepted and returned unchanged.
+    func testSafeUrlFromDecision_isAccepted() throws {
+        let decision = LayaDecisionModel.parseActionDecision(
+            "open_url:https://example.com/page", confidence: 0.9, elements: [])
+
+        XCTAssertEqual(decision.operation, .openUrl)
+        XCTAssertEqual(decision.textValue, "https://example.com/page")
+    }
+
     /// Verifies completion verification follows the noul answer in both directions.
     func testVerifyCompletion_usesTheNoulAnswer() async throws {
         let yes = try Self.decode(#"{"answers":{"done":{"type":"noul","noul":0.8}}}"#)

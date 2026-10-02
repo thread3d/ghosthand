@@ -86,6 +86,17 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
             return AgentDecision(operation: .askUser, reason: "Could not parse decision")
         }
 
+        // Deterministic grounding: the model may only pick from the candidates we generated
+        // from the goal and the visible screen. A recognized-but-unoffered key (extra text,
+        // an element id the screen never exposed, an invented URL) is refused rather than
+        // becoming action authority.
+        guard cappedChoices[action.choice] != nil else {
+            GhostLog.shared.warning(
+                "Laya returned action '\(action.choice)' that was not among the offered candidates. Asking the user."
+            )
+            return AgentDecision(operation: .askUser, reason: "Model selected an action that was not offered.")
+        }
+
         // Execute the chosen action directly as decided by Laya.
         GhostLog.shared.info(
             "Laya selected action: '\(action.choice)' (probability: \(LayaDecisionModel.percent(action.confidence)))"
@@ -373,12 +384,22 @@ public final class LayaDecisionModel: DecisionModel, @unchecked Sendable {
 
         if key.lowercased().hasPrefix("open_url:") {
             let url = String(key.dropFirst(9)).trimmed
+            // Re-validate at the parse boundary so a decision-supplied URL obeys the same
+            // rules as one extracted from the goal: http/https, a real host, no embedded
+            // credentials. Otherwise a response URL would bypass candidate validation.
+            guard let validated = UrlLauncherValidator.isValidWebURL(url) else {
+                return AgentDecision(
+                    operation: .askUser,
+                    reason: "Rejected a URL from the decision model that is not a safe web URL.",
+                    confidence: confidence
+                )
+            }
             return AgentDecision(
                 operation: .openUrl,
-                targetId: url,
-                targetLabel: url,
-                textValue: url,
-                reason: "Open web URL '\(url)'",
+                targetId: validated.absoluteString,
+                targetLabel: validated.absoluteString,
+                textValue: validated.absoluteString,
+                reason: "Open web URL '\(validated.absoluteString)'",
                 confidence: confidence
             )
         }

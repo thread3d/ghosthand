@@ -580,6 +580,32 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertTrue(result.message?.contains("cancelled") ?? false)
     }
 
+    /// Verifies a cancellation that lands after the decision is still seen before the executor runs.
+    func testCancellationDuringDecision_stopsBeforeExecuting() async {
+        let reader = FakeScreenReader(elements: [button("e1")])
+        let model = FakeDecisionModel()
+        // Cancel the current task from inside the decision, i.e. after the iteration's
+        // top-of-loop cancellation check has already passed.
+        model.decisionProvider = {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return AgentDecision(operation: .click, targetId: "e1", targetLabel: "Search Button")
+        }
+        let executor = FakeActionExecutor()
+
+        let loop = AgentLoop(
+            screenReader: reader,
+            decisionModel: model,
+            actionExecutor: executor,
+            options: options(),
+            riskPolicy: DefaultRiskPolicy()
+        )
+
+        let result = await loop.run(goal: "click search", target: testTarget())
+
+        XCTAssertEqual(result.status, .cancelled)
+        XCTAssertEqual(executor.executed.count, 0, "cancellation must be re-checked at the execution boundary")
+    }
+
     // MARK: RS13 — a prohibited action aborts without executing
 
     /// Verifies that a prohibited action aborts the run without executing or prompting.

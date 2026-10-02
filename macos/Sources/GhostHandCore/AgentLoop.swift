@@ -275,6 +275,10 @@ public final class AgentLoop {
                 }
 
                 // 10. Execute action (dry-run or live).
+                // Re-check cancellation at the execution boundary: a cancellation that
+                // arrived while we were reading, deciding or confirming must stop the run
+                // before the side effect, not after it.
+                try Task.checkCancellation()
                 let actionLabel = targetElement != nil ? "'\(targetElement!.displayLabel)'" : (decision.targetId ?? "")
                 notifyStatus("\(stepPrefix): \(decision.operation.rawValue) on \(actionLabel)")
 
