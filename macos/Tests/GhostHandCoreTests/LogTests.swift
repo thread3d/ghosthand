@@ -38,4 +38,27 @@ final class LogTests: XCTestCase {
         XCTAssertTrue(contents.contains("first line"), contents)
         XCTAssertTrue(contents.contains("second line"), contents)
     }
+
+    /// Verifies that writes racing with a reconfiguration neither crash nor lose the log:
+    /// configuration reads and writes share the logger's lock with the write path.
+    func testFileLogging_concurrentConfigurationAndWrites_areSafe() {
+        let log = GhostLog()
+        let path = temporaryPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        log.filePath = path
+        log.minimumLevel = .trace
+
+        DispatchQueue.concurrentPerform(iterations: 400) { index in
+            if index.isMultiple(of: 4) {
+                log.minimumLevel = index.isMultiple(of: 8) ? .error : .trace
+            } else {
+                log.warning("line \(index)")
+            }
+        }
+
+        log.minimumLevel = .trace
+        log.warning("final line")
+        let contents = try? String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertTrue(contents?.contains("final line") ?? false, contents ?? "")
+    }
 }
